@@ -1,0 +1,382 @@
+import Testing
+import NumlexTestKit
+
+/// Real Swift Testing suite. On a full Xcode toolchain `swift test`
+/// executes one test per engine case (33 cases, 40+ assertions).
+@Suite("Numlex calculation engine")
+struct EngineTests {
+    @Test(arguments: engineCases)
+    func engineCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: sheetCases)
+    func sheetCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: syntaxCases)
+    func syntaxCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: formatCases)
+    func formatCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: settingsCases)
+    func settingsCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: caretCases)
+    func caretCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: baselineCases)
+    func baselineCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: spaceTypingCases)
+    func spaceTypingCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: conversionCases)
+    func conversionCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: deletionCases)
+    func deletionCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: overflowCases)
+    func overflowCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: answerReferenceCases)
+    func answerReferenceCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: answerTokenAdditionCases)
+    func answerTokenAdditionCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: unitCatalogCases)
+    func unitCatalogCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: richConversionCases)
+    func richConversionCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: rateTableCases)
+    func rateTableCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: rateServiceCases)
+    func rateServiceCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: moneyCases)
+    func moneyCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: dateCases)
+    func dateCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: moneyAssignmentCases)
+    func moneyAssignmentCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r18Cases)
+    func r18ProseMoneyAndTokenMixing(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r18FormatCases)
+    func r18NaturalAutospacing(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r18AnimationCases)
+    func r18TokenAppearance(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r19OperatorCases)
+    func r19OperatorFormatting(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r19GroupCases)
+    func r19ThousandGrouping(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r19PrevAnswerCases)
+    func r19PreviousAnswer(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r19IdentityCases)
+    func r19TokenIdentityWithExactMap(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r19SettingsCases)
+    func r19SettingsCompatibility(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r19RefFixCases)
+    func r19PreviousAnswerReferencePreservation(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: windowGeometryCases)
+    func windowSidebarGeometry(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: windowStartupCases)
+    func windowStartupLifecycle(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: stylingCases)
+    func stylingStoreBehavior(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: syntaxRoleCases)
+    func syntaxRoleClassification(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r32Cases)
+    func r32ExpandedCurrenciesAndConversions(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r33Cases)
+    func r33CustomConstants(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r35Cases)
+    func r35GeneratedConstantNames(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r39Cases)
+    func r39SidebarFolders(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r40Cases)
+    func r40FolderTabs(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r41Cases)
+    func r41TabStripThreshold(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r43Cases)
+    func r43AnswerTokenAtCaret(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r44Cases)
+    func r44RepeatedSameSourceBubbles(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r47Cases)
+    func r47MathematicalFunctions(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r51Cases)
+    func r51AnswerContextMenu(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: glassToneCases)
+    func r52SidebarGlassTones(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r53Cases)
+    func r53NamedMoneyProse(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r54Cases)
+    func r54AnswerSliderMenu(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r55Cases)
+    func r55WeatherQueries(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r56Cases)
+    func r56CityHighlight(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r57Cases)
+    func r57InlineTotals(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r58Cases)
+    func r58SectionTotals(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r59Cases)
+    func r59CompactWindow(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r61Cases)
+    func r61SidebarButton(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r62Cases)
+    func r62BubbleTokens(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: r73Cases)
+    func r73RegionalNumbers(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: updateCases)
+    func updateCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    // Pre-existing registration repair: `plainDMGCases` was stacked onto
+    // the already-attributed `updateCase`, which Swift Testing rejects
+    // ("Attribute 'Test' cannot be applied to a function more than
+    // once") and which therefore broke the whole Swift Testing target.
+    // Same cases, its own wrapper — nothing is skipped.
+    @Test(arguments: plainDMGCases)
+    func plainDMGCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: currencyCases)
+    func currencyCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: welcomeCases)
+    func welcomeCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: settingsNavigationCases)
+    func settingsNavigationCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: appIconAppearanceCases)
+    func appIconAppearanceCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: package7Cases)
+    func package7Case(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: pdfExportCases)
+    func pdfExportCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: footerTotalCases + footerTotalLayoutCases)
+    func footerTotalCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: answerColumnWidthCases)
+    func answerColumnWidthCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: resourceLocatorCases)
+    func resourceLocatorCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: totalLastCases)
+    func totalLastCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: notebookFontCases)
+    func notebookFontCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: linkedConversionCases)
+    func linkedConversionCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: sheetExportCases)
+    func sheetExportCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: sheetBehaviorCases)
+    func sheetBehaviorCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: floatingTotalCases)
+    func floatingTotalCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: autoConvertCases)
+    func autoConvertCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: weatherMetricCases)
+    func weatherMetricCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+
+    @Test(arguments: minimalModeCases)
+    func minimalModeCase(`case`: EngineCase) throws {
+        try `case`.body()
+    }
+}

@@ -1,0 +1,218 @@
+import Foundation
+
+/// The TYPED inline-total command recognized by the sheet loops.
+/// Bare `total` and `total last N` are the same command family and
+/// share one section boundary contract; only the summed window
+/// differs.
+public enum InlineTotalCommand: Equatable, Sendable {
+    /// Bare `total`: every eligible row of the current legacy section.
+    case section
+    /// `total last N`: the eligible rows among the N immediately
+    /// preceding logical source rows of the current legacy section
+    /// (every row occupies a slot, only eligible rows contribute).
+    case last(lineCount: Int)
+}
+
+/// Inline `total` rows (r57, refined r58): a standalone `total` line
+/// sums the evaluated values of the eligible rows in its SECTION —
+/// the rows since the preceding `total`, or from sheet start when
+/// there is none — and renders its answer semibold with a gray rule
+/// above it.
+///
+/// `total last N` (bounded inline total): the same command family,
+/// restricted to the N immediately preceding LOGICAL source rows of
+/// the current section. `N` counts logical lines, never eligible
+/// results: blank, prose, comment, error, money/unit, bare-token and
+/// derived aggregate rows all occupy one slot and contribute zero.
+/// The command is section-scoped like bare `total` (it can never see
+/// above the nearest prior legacy total/heading/divider) and resets
+/// the whole section afterwards, so section boundaries, shadowing,
+/// metadata and presentation stay identical for both forms.
+///
+/// Semantics (r58 section subtotals, user-corrected):
+/// - The keyword is exactly ASCII `total`, case-insensitive, with
+///   outer spaces/tabs allowed. `subtotal`, `total:`, `total + 5`,
+///   prose, comments and headings never trigger. Source is never
+///   rewritten and `total` is not reserved globally: an ACTIVE
+///   variable or global constant named `total`
+///   (`TypedEnv.entry(display:)` canonical lookup) takes precedence,
+///   so `total = 5` stays an ordinary assignment.
+/// - Section-scoped: every recognized total command returns the
+///   current section sum and then RESETS the accumulator to zero, so
+///   the next section starts empty. A blank, a heading, prose or an
+///   error row never resets (and never contributes); only a total
+///   command is a section boundary. Each eligible answer row
+///   contributes ONCE (row sum, not dependency-DAG deduplication):
+///   finite unitless `.number` and `.variable` values, including
+///   token-derived scalar rows. Money, unit-bearing quantities
+///   (weather included), dates and inactive tokens never contribute to
+///   THIS section sum (the persistent bottom Total panel has its own,
+///   dimension-agnostic contract — see `SheetFooterTotal`).
+///   A prior total row never enters a new section, but an ordinary
+///   later reference TO a total is an ordinary result row of ITS
+///   section and contributes normally. An empty section totals 0, and
+///   consecutive totals yield the section sum once and then 0.
+///   No conversion/FX/units aggregation.
+/// - The aggregate uses EVALUATED numeric values (never display
+///   strings or per-row rounding overrides) under the engine's
+///   precision conventions. Overflow poisons the CURRENT section
+///   only: that section's total is the deterministic quiet generic
+///   error — never a fabricated zero or partial total, never
+///   NaN/inf, never a crash — and the boundary still resets, so the
+///   NEXT section starts fresh with no partial carry.
+/// - A ready total is an ordinary `.number(value:, unit: nil)` for
+///   Copy, the 0...10 dp slider, Delete Line, live tokens, hover and
+///   previous-answer planning; the derived presentation flag rides
+///   separately on `SheetLine.isTotal` (defaulted, never persisted).
+/// - Accumulation is O(n): both sheet loops feed one shared
+///   `TotalAccumulator` top-down instead of rescanning prefixes.
+///   The persistent bottom-panel Total is deliberately NOT sectioned
+///   and lives in `SheetFooterTotal`: it sums the evaluated magnitude
+///   of every ordinary scalar row of the whole sheet (unitless
+///   numbers, unit-bearing quantities, money, named scalars and exact
+///   integers; total rows excluded), so section subtotals never
+///   double-count.
+///
+/// Grammar of BOTH forms (strict and deterministic; the caller passes
+/// the tag-stripped evaluation projection, so a terminal tag never
+/// changes the command):
+/// - bare `total`, or case-insensitive `total last N` with one or more
+///   spaces/tabs between the tokens, after the outer spaces/tabs are
+///   trimmed;
+/// - `N` is ASCII base-10 only and must parse without overflow into
+///   `1...Int.max`: `total last 0`, `total last -3`,
+///   `total last 3.5`, `total last`, `total last 3 x`,
+///   `total last ٣` and an overflowing count are all ordinary
+///   non-command rows;
+/// - an ACTIVE variable or constant named `total` suppresses BOTH
+///   forms (`total = 5` stays an assignment, and a later
+///   `total last 3` stays an ordinary expression row).
+public enum InlineTotal {
+    /// The strict TYPED inline-total command of one logical line in the
+    /// CURRENT environment, or nil when the line is not a total
+    /// command (`InlineTotalCommand.section` for bare `total`,
+    /// `.last(lineCount:)` for a bounded one).
+    public static func parse(_ line: String, env: TypedEnv) -> InlineTotalCommand? {
+        // Outer spaces/tabs only; the trimmed text must then be exactly
+        // the keyword, optionally followed by `last N`.
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        let tokens = trimmed
+            .split(whereSeparator: { $0 == " " || $0 == "\t" })
+            .map(String.init)
+        guard let head = tokens.first, head.lowercased() == "total" else { return nil }
+        // `total` is not reserved globally: an active entry of that name
+        // (canonical case/whitespace lookup) suppresses both forms.
+        guard env.entry(display: "total") == nil else { return nil }
+        switch tokens.count {
+        case 1:
+            return .section
+        case 3 where tokens[1].lowercased() == "last":
+            guard let count = positiveLineCount(tokens[2]) else { return nil }
+            return .last(lineCount: count)
+        default:
+            return nil
+        }
+    }
+
+    /// The strict `N` of `total last N`: one or more ASCII decimal
+    /// digits only (no sign, decimal point, exponent or non-ASCII
+    /// digit) that parse without overflow into `1...Int.max`.
+    static func positiveLineCount(_ text: String) -> Int? {
+        guard !text.isEmpty,
+              text.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let value = Int(text), value >= 1 else {
+            return nil
+        }
+        return value
+    }
+
+    /// Whether the logical line is a total command in the CURRENT
+    /// environment: the strict standalone shape, suppressed whenever
+    /// the environment holds an active entry named `total` (variable
+    /// or immutable constant, canonical case/whitespace lookup).
+    /// Standalone `evalLine` has no sheet context, so the command is
+    /// recognized only by the sheet loops that own an accumulator —
+    /// `evalLineTyped` keeps returning nil here (quiet skip) exactly
+    /// as before, and the classifier leaves the keyword base text.
+    /// Compatibility helper: the sheet loops use `parse` and switch on
+    /// the typed command.
+    public static func isCommand(_ line: String, env: TypedEnv) -> Bool {
+        parse(line, env: env) != nil
+    }
+
+    /// The eligible contribution of one evaluated row to the SECTION
+    /// total, or nil when the row never contributes here (money,
+    /// unit-bearing quantities, booleans, dates, locations/DMS and
+    /// non-scalar rows are excluded — the bottom footer total has its
+    /// own, broader contract in `SheetFooterTotal`). Total rows are excluded by the caller
+    /// via `isTotalRow` so a total can never double-count an earlier
+    /// total (direct ordinary references to a total line are ordinary
+    /// rows and contribute normally).
+    public static func contribution(of result: LineResult, isTotalRow: Bool) -> Double? {
+        guard !isTotalRow else { return nil }
+        switch result {
+        case .number(let v, nil, _, _) where v.isFinite:
+            return v
+        case .variable(_, let v, _, _) where v.isFinite:
+            return v
+        case .integer(let v, _):
+            // r85: exact rows contribute their deterministic Double
+            // projection (exact while |v| <= 2^53).
+            return Double(v)
+        case .variableInt(_, let v, _):
+            return Double(v)
+        // r85: coordinates and DMS never enter totals.
+        case .location, .dms:
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    /// The generic hidden error of an overflowing aggregate — the same
+    /// quiet message every other strict failure uses (renders nothing,
+    /// offers no menu, breaks dependent tokens deterministically).
+    public static let overflowMessage = "Invalid expression"
+}
+
+/// The O(n) running SECTION aggregate owned by ONE sheet pass. Both
+/// `evaluateSheet` and `resolveSheet` feed rows top-down in their
+/// existing sequential loops: observe every completed row, resolve
+/// each total command against its section only, then reset.
+public struct TotalAccumulator: Sendable {
+    private var sum: Double = 0
+    private var overflowed: Bool = false
+
+    public init() {}
+
+    /// Feeds one evaluated row into the section sum. Non-finite
+    /// arithmetic poisons the CURRENT section — its total errors
+    /// rather than fabricating a partial sum — while the boundary
+    /// reset below keeps later sections independent.
+    public mutating func observe(result: LineResult, isTotalRow: Bool) {
+        guard !overflowed,
+              let c = InlineTotal.contribution(of: result, isTotalRow: isTotalRow) else {
+            return
+        }
+        let next = sum + c
+        guard next.isFinite else {
+            overflowed = true
+            return
+        }
+        sum = next
+    }
+
+    /// Resolves one total command and RESETS the section: the rounded
+    /// section sum, 0 for an empty section (even an empty reset), or
+    /// the quiet generic error when the section overflowed. The reset
+    /// always happens — an overflow never carries a partial sum into
+    /// the next section. Never mutates the environment.
+    public mutating func total(decimalPlaces: Int) -> LineResult {
+        defer { sum = 0; overflowed = false }
+        guard !overflowed else {
+            return .error(message: InlineTotal.overflowMessage)
+        }
+        return .number(value: roundResult(sum, decimalPlaces: decimalPlaces), unit: nil)
+    }
+}

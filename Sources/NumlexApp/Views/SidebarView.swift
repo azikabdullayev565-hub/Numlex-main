@@ -1,0 +1,1042 @@
+import SwiftUI
+import NumlexCore
+import UniformTypeIdentifiers
+
+/// Sheets sidebar (liquid-glass redesign, r40 folder tabs): a padded
+/// leading VStack with the full-width New Sheet action, the ONE filtered
+/// sheet list (the sheets of the active tab) and the pinned bottom
+/// folder tab strip. Every row uses the system liquid glass materials —
+/// the selected sheet and the active tab show the regular interactive
+/// pill, a hovered drop target a stronger tint — so the sidebar stays
+/// calm in inactive windows and both appearances.
+///
+/// r40: folders are NOT an expandable hierarchy. They are tab-like
+/// filters pinned to the sidebar bottom: selecting General or a custom
+/// tab changes ONLY the upper sheet list (never the editor). Creation
+/// happens through the hover `+` on any tab row (no standalone New
+/// Folder button). The bottom Settings gear row has been GONE since
+/// r39 — Settings is reachable through the system Settings… menu item
+/// and ⌘, only.
+///
+/// r41: geometry and hover parity. A short tab list is NOT inside any
+/// ScrollView (no scroll state, wheel passes through); only beyond the
+/// visible cap does a bounded ScrollView appear. The hover `+` is driven
+/// by per-surface hover tracking with a short cancellable exit, so
+/// crossing label→plus→plus on macOS 26 can never produce a visible-off
+/// frame or a disabled control.
+///
+/// r42: (a) the active/drop tab glass uses `folderTabShape` — a
+/// radius-7 continuous corner PROPORTIONAL to the compact 26 pt row
+/// (≈0.27 of the row height, matching the reference capture), instead
+/// of the radius-10 `sidebarButtonShape` that made the small row read
+/// as a pill. The action controls (New Sheet / Import / Export) keep
+/// `sidebarButtonShape`, sheet rows keep radius 11. (b) a
+/// zero-footprint `NativeScrollerSuppressor` is attached to both
+/// sidebar ScrollViews: SwiftUI's `.scrollIndicators(.hidden)` is
+/// declarative, but under the system "Always show scroll bars"
+/// preference the backing NSScrollView can still materialize a legacy
+/// scroller with a visible gutter, so the native scroll view is
+/// located (by window-space containment — never the editor's)
+/// and forced scroller-free on mount, every SwiftUI update, and every
+/// layout pass. Scrolling itself is untouched.
+///
+/// Sheet import/export live in the File menu (NumlexApp commands); the
+/// sidebar carries no file-action row. The base column surface is the
+/// explicit `Design.sidebarBackground` (exactly the editor surface —
+/// Golden Gate fix, never the native window material), filling the full
+/// column including the traffic-light/titlebar strip; there is no fake
+/// titlebar, traffic-light row or sidebar toggle.
+struct SidebarView: View {
+    @Bindable var model: AppModel
+    @State private var renamingID: UUID?
+    /// The folder tab currently in inline rename (a folder created via
+    /// the hover `+` opens straight into it).
+    @State private var renamingFolderID: UUID?
+    /// The tab a sheet drag currently targets (glass swap only — no
+    /// geometry change). SidebarGroup-based so General (nil id) can
+    /// never match an idle nil by accident.
+    @State private var dropTargetGroup: SidebarGroup?
+    /// TEMPORARY QA CONTROL — remove after onboarding sign-off.
+
+    // MARK: r41 hover tracking
+
+    /// The r41 hover model. The macOS 26 failure mode this bridges: a
+    /// container-level `.onHover` is NOT reliably kept true while the
+    /// pointer moves onto a CHILD Button (the child's own tracking area
+    /// can emit the parent's hover-exit), and the r40 single-parent
+    /// hover plus `.allowsHitTesting(hidden)` therefore flickered the
+    /// plus OFF exactly when the pointer reached it — the control hid
+    /// itself before the click could land.
+    ///
+    /// Robust semantics:
+    ///  - Each tab tracks its TWO surfaces independently: the selection
+    ///    label (the row surface) and the reserved plus slot (the slot
+    ///    surface). Visibility is their UNION — moving label→slot can
+    ///    lose the row surface but gains the slot surface in the same
+    ///    gesture batch, so the plus is never visible-off while the
+    ///    pointer is anywhere in the row.
+    ///  - The slot surface is hover-capable BEFORE the reveal: a clear,
+    ///    always-hit-testable sentinel occupies the reserved slot, so
+    ///    the pointer can arm the plus by moving into it.
+    ///  - The plus BUTTON is hit-testable only while armed: a blind
+    ///    click on a hidden slot falls through to the sentinel (which
+    ///    has no action) and can never create a folder.
+    ///  - Hover ENTER is immediate; hover EXIT is deferred by a short
+    ///    CANCELLABLE grace (80 ms): if any surface of the same tab is
+    ///    re-entered within the window (e.g. the sentinel→button handoff
+    ///    when the plus reveals under a stationary cursor), the pending
+    ///    exit is invalidated. Leaving the full row hides the plus after
+    ///    the grace — imperceptibly.
+    ///
+    /// Invariant: `armed(tab) == (row or slot surface of tab currently
+    /// hovered) && !renaming(tab) && !dragOver`. Selection and plus stay
+    /// separate hit targets; clicking the plus never activates the
+    /// hovered source tab.
+    /// Surfaces currently inside the row/slot (keys: "row|<gid>" /
+    /// "slot|<gid>").
+    @State private var hoverSurfaces: Set<String> = []
+    /// Pending deferred-exit generations per surface key; a newer
+    /// generation (from an enter or a later exit) invalidates it.
+    @State private var hoverExitGeneration: [String: Int] = [:]
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var language: AppLanguage { model.settings.language }
+
+    /// The shared top action shape: the rounded-10 continuous rect of
+    /// the original r38 New Sheet button. Used by the sidebar ACTION
+    /// controls (New Sheet / Import / Export) only.
+    private var sidebarButtonShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+    }
+
+    /// The folder-TAB shape: radius-7 continuous, proportional to the
+    /// compact 26 pt tab row (≈0.27 of the height — the corner/height
+    /// ratio of the reference selection pill). The radius-10 action
+    /// shape on a 26 pt row overshoots that ratio and reads as a pill;
+    /// a radius proportional to the row height keeps the selected tab
+    /// clearly lifted but not capsule. Active and drop-target glass
+    /// both pass this exact value, so hit/content/drop geometry match.
+    private var folderTabShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+    }
+
+    /// r40: the VISIBLE-list signature — the sheet ids of the ACTIVE
+    /// tab plus the tab identity: switching tabs, creating, deleting or
+    /// moving visible sheets changes exactly this value; a plain rename
+    /// or a change in ANOTHER tab never reflows the visible list.
+    private var visibleSignature: String {
+        let fid = model.activeGroupID
+        let ids = model.sheets(in: fid).map { $0.sheet.id.uuidString }
+        return "\(fid?.uuidString ?? "-")|\(ids.joined(separator: ","))"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // The action row: the original full-width New Sheet button
+            // alone (folder creation lives on the hover + of the tabs).
+            Button {
+                model.newSheet()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.capsule")
+                    Text(L10n.t("newSheet", language: language))
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // r52 (Tahoe fix): the SAME single-glass-surface primitive the
+            // sheet rows and folder tabs use — one untinted Liquid Glass
+            // layer with the graphite wash composited underneath by a
+            // normal shape fill. No direct `.tint` path, no second
+            // material, no hit-testing change, no layout change.
+            .modifier(SidebarGlassSurface(role: .selected, shape: sidebarButtonShape))
+            .help(L10n.t("newSheet", language: language))
+
+            // A hairline between the action row and the list: the
+            // native Divider only — no glass, no material, no custom
+            // rectangle. Inset 4 pt per side so it sits optically
+            // inside the sidebar padding.
+            Divider()
+                .padding(.horizontal, 4)
+
+            // The upper sheet list: the sheets of the ACTIVE tab only —
+            // no group headers, no nesting, no disclosure state. A plain
+            // (non-lazy) VStack is DELIBERATE: sheet rows are lightweight
+            // sidebar metadata and coherent full-list reflow (tab switch,
+            // insert, remove, move) matters more than lazy realization.
+            // 50-row lists stay cheap: each row is two text lines and one
+            // optional glass pill. The list takes the flexible remaining
+            // height between the action row and the bottom tabs.
+            ScrollView {
+                let entries = model.sheets(in: model.activeGroupID)
+                VStack(spacing: 5) {
+                    if entries.isEmpty {
+                        // A calm localized empty state — no auto-created
+                        // sheet, no faked selection.
+                        Text(L10n.t("folderEmpty", language: language))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 28)
+                    } else {
+                        ForEach(entries, id: \.sheet.id) { entry in
+                            sheetRow(idx: entry.index, sheet: entry.sheet)
+                                .transition(reduceMotion ? .identity : sectionTransition)
+                        }
+                    }
+                }
+                // Row insertion/removal/move/tab-switch animates ONLY
+                // inside this list: the transaction is scoped here, so
+                // the editor and answer column (which also observe the
+                // model) never pick up an animated transaction. 0.34 s
+                // keeps the reflow visibly progressive at 60 fps without
+                // bounce; reduceMotion gets no decorative animation.
+                .animation(reduceMotion ? nil : .snappy(duration: 0.34),
+                           value: visibleSignature)
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+            .background(NativeScrollerSuppressor())
+            .frame(maxHeight: .infinity)
+            // Any deletion path that removes the row currently being
+            // renamed clears the stale rename state.
+            .onChange(of: model.sheets.map(\.id)) { _, ids in
+                if let rid = renamingID, !ids.contains(rid) { renamingID = nil }
+            }
+            // A folder going away clears a stale rename, repairs the
+            // active tab (an invalid folder always falls back to
+            // General) and drops hover state that could point at a
+            // stale row (r41).
+            .onChange(of: model.folders.map(\.id)) { _, ids in
+                if let fid = renamingFolderID, !ids.contains(fid) {
+                    renamingFolderID = nil
+                }
+                model.repairActiveGroup()
+                cleanStaleHover(ids: ids)
+            }
+
+            // The native inset hairline separating the scrolling sheets
+            // from the pinned tab strip.
+            Divider()
+                .padding(.horizontal, 4)
+
+            // The pinned bottom folder tabs.
+            folderTabs
+
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .frame(idealWidth: 235, maxWidth: 260)
+        // Golden Gate explicit surface: the outer column fill (safe-area
+        // expanded so it covers the traffic-light/titlebar strip where
+        // the NavigationSplitView sidebar extends), never an interior
+        // padded-layer fill. Glass pills/tabs float above unchanged.
+        .background {
+            Color(nsColor: Design.sidebarBackground).ignoresSafeArea()
+        }
+        // Sidebar|editor hairline: trailing overlay (zero layout
+        // footprint, so the measured sidebar width and collapse math
+        // stay exact), full column height including the titlebar strip.
+        .overlay(alignment: .trailing) {
+            Color(nsColor: Design.panelSeparator)
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+                .ignoresSafeArea(edges: .vertical)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// The shared row transition: insertion is the standard top entry
+    /// (slide down from the top edge + fade in, no x motion, no scale),
+    /// removal is a short opacity fade plus a slight leading nudge.
+    /// reduceMotion callers substitute .identity.
+    private var sectionTransition: AnyTransition {
+        .asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .opacity.combined(with: .offset(x: -12)))
+    }
+
+    // MARK: r41 hover plumbing
+
+    private enum TabHoverSurface: String { case row, slot }
+
+    private func hoverKey(_ surface: TabHoverSurface, _ group: SidebarGroup) -> String {
+        let gid: String
+        switch group {
+        case .folder(let id): gid = id.uuidString
+        case .general, .none: gid = "general"
+        }
+        return "\(surface.rawValue)|\(gid)"
+    }
+
+    /// Enter/exit of one hover surface of one tab. Enter is immediate
+    /// and invalidates any pending exit for that surface; exit schedules
+    /// a short cancellable removal (see the r41 hover notes above).
+    private func hover(_ surface: TabHoverSurface, _ group: SidebarGroup, inside: Bool) {
+        let key = hoverKey(surface, group)
+        if inside {
+            hoverExitGeneration[key, default: 0] += 1
+            hoverSurfaces.insert(key)
+        } else {
+            guard hoverSurfaces.contains(key) else { return }
+            let generation = (hoverExitGeneration[key] ?? 0) + 1
+            hoverExitGeneration[key] = generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard hoverExitGeneration[key] == generation,
+                      hoverSurfaces.contains(key) else { return }
+                hoverSurfaces.remove(key)
+            }
+        }
+    }
+
+    /// The `+` of a tab is armed while either of its surfaces is hovered
+    /// and nothing shadows it (an inline rename on that tab, or a sheet
+    /// drag over the row).
+    private func plusArmed(_ group: SidebarGroup, isRenaming: Bool) -> Bool {
+        guard !isRenaming, dropTargetGroup == nil else { return false }
+        return hoverSurfaces.contains(hoverKey(.row, group))
+            || hoverSurfaces.contains(hoverKey(.slot, group))
+    }
+
+    /// Folds the hover state after the folder list changed: a surface
+    /// whose folder no longer exists is dropped and its pending exit is
+    /// cancelled, so hover state can never point at a stale row (r41).
+    private func cleanStaleHover(ids: [UUID]) {
+        let valid = Set(ids)
+        hoverSurfaces = hoverSurfaces.filter { key in
+            let gid = key.split(separator: "|").last.map(String.init) ?? ""
+            return gid == "general" || valid.contains(UUID(uuidString: gid)!)
+        }
+        for (key, taskGen) in hoverExitGeneration where !hoverSurfaces.contains(key) {
+            _ = taskGen // the deferred check re-validates against hoverSurfaces
+        }
+        hoverExitGeneration = hoverExitGeneration.filter { hoverSurfaces.contains($0.key) }
+    }
+
+    // MARK: Bottom folder tabs
+
+    /// The pinned bottom tab strip (r41, adaptive). Up to the visible
+    /// cap (General + 5 custom) the rows are a PLAIN fixed VStack pinned
+    /// at the bottom — no ScrollView exists at all, so a wheel or
+    /// trackpad over the tabs neither scrolls nor bounces and there is
+    /// no scroll state to carry. Only when the total rows EXCEED the
+    /// cap is a bounded ScrollView constructed, at exactly the capped
+    /// height; the sheet list above keeps the remaining space in both
+    /// cases. Both presentations share `tabRows`, so the rows — and
+    /// with them UUID identity, active selection, rename target, hover
+    /// and drop semantics (all model- or SidebarView-level state) — are
+    /// geometrically and behaviorally identical across the threshold.
+    /// (The one transient that a threshold crossing re-creates is the
+    /// field editor of an in-progress rename; it re-opens focused with
+    /// the stored title selected.)
+    @ViewBuilder
+    private var folderTabs: some View {
+        if SheetOrganization.tabStripScrolls(customFolderCount: model.folders.count) {
+            ScrollView {
+                tabRows
+            }
+            .frame(height: Self.tabStripHeight(rows: SheetOrganization.tabVisibleCap))
+            .scrollIndicators(.hidden)
+            .background(NativeScrollerSuppressor())
+        } else {
+            tabRows
+                .frame(height: Self.tabStripHeight(rows: model.folders.count + 1))
+        }
+    }
+
+    /// The shared tab-row stack: General first, then the ordered custom
+    /// folders. ONE builder for both presentations (no duplicate row
+    /// code, no duplicate identity).
+    private var tabRows: some View {
+        VStack(spacing: 3) {
+            folderTabRow(groupID: nil,
+                         title: L10n.t("folderGeneral", language: language),
+                         icon: "list.bullet.rectangle",
+                         isCustom: false)
+            ForEach(model.folders) { folder in
+                folderTabRow(groupID: folder.id,
+                             title: folder.title,
+                             icon: "folder",
+                             isCustom: true)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    /// Exact stack height for `rows` tab rows (26 pt each, 3 pt
+    /// spacing, 1 pt vertical padding) — the fixed and capped
+    /// presentations agree mechanically, so crossing the threshold
+    /// does not change the strip's footprint when at the cap.
+    private static func tabStripHeight(rows: Int) -> CGFloat {
+        let r = max(rows, 1)
+        return CGFloat(r) * 26 + CGFloat(max(r - 1, 0)) * 3 + 2
+    }
+
+    /// One folder tab: a compact full-width row (SF symbol + 13pt
+    /// primary title) with a RESERVED trailing control slot. The slot
+    /// carries the hover `+` (create a sibling folder): opacity-hidden
+    /// and non-hit-testable until armed, but the SLOT ITSELF is always
+    /// hover-capable via a clear sentinel, so the reveal is driven by
+    /// the pointer alone (r41 hover model). Tab selection and the plus
+    /// are SEPARATE hit targets — clicking the plus never first
+    /// activates the hovered tab. The whole row is a drop target for
+    /// sheet moves; custom tabs additionally keep the Rename and (safe)
+    /// Delete context items, General cannot be renamed or deleted.
+    @ViewBuilder
+    private func folderTabRow(groupID: UUID?, title: String, icon: String,
+                              isCustom: Bool) -> some View {
+        let thisGroup: SidebarGroup = groupID.map { .folder($0) } ?? .general
+        let isRenaming = isCustom && renamingFolderID == groupID
+        let armed = plusArmed(thisGroup, isRenaming: isRenaming)
+        HStack(spacing: 0) {
+            // Selection surface: icon + title (or the inline rename
+            // field while renaming). Its own hover feeds the ROW
+            // surface of the union.
+            Button {
+                model.activate(group: thisGroup)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    Group {
+                        if isRenaming {
+                            RenameField(initial: title) { value in
+                                model.renameFolder(id: groupID!, to: value)
+                                renamingFolderID = nil
+                            } onCancel: {
+                                renamingFolderID = nil
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text(title)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // Double-click renames the custom tab in place.
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    if isCustom { renamingFolderID = groupID }
+                }
+            )
+            .onHover { inside in
+                hover(.row, thisGroup, inside: inside)
+            }
+            // r41: the context menu lives on THIS node (the same one the
+            // row hover tracks), never on an ancestor: on macOS 26 a
+            // tracking boundary (contextMenu/help) on an ANCESTOR kills
+            // the child's .onHover, which would dead the whole reveal.
+            // Same-node tracking coexists with the hover (General tab:
+            // empty menu, same pattern, shows nothing).
+            .contextMenu {
+                if isCustom {
+                    Button {
+                        model.newSheet(in: .folder(groupID!))
+                    } label: {
+                        Label(L10n.t("newSheetInFolder", language: language), systemImage: "plus")
+                    }
+                    Button {
+                        renamingFolderID = groupID
+                    } label: {
+                        Label(L10n.t("renameFolder", language: language), systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        model.deleteFolder(id: groupID!)
+                    } label: {
+                        Label(L10n.t("deleteFolder", language: language), systemImage: "trash")
+                    }
+                    // The wording intentionally does not imply the sheets
+                    // are deleted: they are moved to General.
+                    .help(L10n.t("deleteFolderHelp", language: language))
+                }
+            }
+            // Reserved trailing control slot: a FIXED 26x26 in every
+            // state, so the title and icon never shift when the plus
+            // appears or the row becomes active. Two layers:
+            //  (1) the SENTINEL — clear, always hit-testable, actionless:
+            //      it receives hover even while the plus is hidden, so
+            //      the pointer can arm the reveal by entering the slot.
+            //  (2) the plus BUTTON — visible and hit-testable ONLY while
+            //      armed; a blind click on a hidden slot falls through
+            //      to the sentinel and creates nothing.
+            ZStack {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        hover(.slot, thisGroup, inside: inside)
+                    }
+                    .contextMenu {
+                        if isCustom {
+                            Button {
+                                model.newSheet(in: .folder(groupID!))
+                            } label: {
+                                Label(L10n.t("newSheetInFolder", language: language), systemImage: "plus")
+                            }
+                            Button {
+                                renamingFolderID = groupID
+                            } label: {
+                                Label(L10n.t("renameFolder", language: language), systemImage: "pencil")
+                            }
+                            Button(role: .destructive) {
+                                model.deleteFolder(id: groupID!)
+                            } label: {
+                                Label(L10n.t("deleteFolder", language: language), systemImage: "trash")
+                            }
+                            .help(L10n.t("deleteFolderHelp", language: language))
+                        }
+                    }
+                Button {
+                    renamingFolderID = model.createFolder(after: thisGroup)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(armed ? 1 : 0)
+                .allowsHitTesting(armed)
+                // .onHover sits BEFORE .help so the tooltip's tracking
+                // boundary (if any) wraps the hover source instead of
+                // interposing it.
+                .onHover { inside in
+                    hover(.slot, thisGroup, inside: inside)
+                }
+                .help(L10n.t("newFolder", language: language))
+                .accessibilityLabel(L10n.t("newFolder", language: language))
+            }
+            .frame(width: 26, height: 26)
+        }
+        .frame(height: 26)
+        // The ONE glass layer. r42: the tab glass uses `folderTabShape`
+        // (rounded-7 continuous — proportional to the 26 pt row, per
+        // the reference corner ratio; passed in, not re-literalized).
+        // The stronger tint appears while a sheet drag hovers the tab
+        // (drop feedback, no geometry shift), the regular pill when
+        // this tab is the active filter, no material otherwise.
+        .modifier(SidebarGlassSurface(
+            role: glassRole(dropTarget: dropTargetGroup == thisGroup,
+                            active: model.activeGroup == thisGroup),
+            shape: folderTabShape))
+        // Sheet drags land on tabs (General and folders). The plus stays
+        // hidden and non-actionable during a drag (armed requires no
+        // drop target), the drop target remains the full row.
+        .dropDestination(for: SheetDragItem.self) { items, _ in
+            for item in items {
+                model.moveSheet(id: item.sheetID, to: groupID)
+            }
+            dropTargetGroup = nil
+            return !items.isEmpty
+        } isTargeted: { targeted in
+            if targeted {
+                dropTargetGroup = thisGroup
+            } else if dropTargetGroup == thisGroup {
+                dropTargetGroup = nil
+            }
+        }
+        // r41: NO contextMenu (or any tracking boundary) on the row
+        // container — an ancestor tracking boundary kills the children's
+        // .onHover on macOS 26 (verified experimentally on this build).
+        // The menu is served from the row and slot nodes themselves.
+        // Subtle opacity-only reveal; instant under Reduce Motion.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12),
+                   value: armed)
+        .accessibilityLabel(isCustom ? title
+            : L10n.t("folderGeneral", language: language))
+        .accessibilityHint(L10n.t("dropSheetHere", language: language))
+    }
+
+    // MARK: Sheet rows
+
+    @ViewBuilder
+    private func sheetRow(idx: Int, sheet: Sheet) -> some View {
+        let language = model.settings.language
+        // Localized line count only ("No lines", "1 line", "N lines");
+        // the created-time label is rendered separately in the same row.
+        let count: String = {
+            if sheet.lineCount == 0 {
+                return L10n.t("noLines", language: language)
+            }
+            let unit = L10n.t(sheet.lineCount == 1 ? "line" : "lines", language: language)
+            return "\(sheet.lineCount) \(unit)"
+        }()
+        let isSelected = idx == model.selectedIndex
+        // The row is a plain button for the single-click select (no tap
+        // delay). The double-click rename is a simultaneous count-2
+        // gesture on the button itself. The row is also the DRAG SOURCE
+        // for moving the sheet to another tab (private payload).
+        Button {
+            model.select(index: idx)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                titleView(sheet: sheet)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Metadata: created time leading, localized line count
+                // trailing, both 11pt secondary; the count keeps its
+                // trailing alignment across every row.
+                //
+                // Spacing 0 with ONE 8 pt minimum Spacer gives exactly an
+                // 8 pt gap. A non-zero HStack spacing would add its own gap
+                // on BOTH sides of the Spacer — an accidental 24 pt minimum
+                // (8 + 8 + 8) that truncated the date while visibly free
+                // room remained.
+                HStack(spacing: 0) {
+                    Text(sheet.createdLabel)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    Text(count)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                model.select(index: idx)
+                renamingID = sheet.id
+            }
+        )
+        // Selection is exactly one layer: the system liquid glass pill,
+        // present only on the selected row (the System Settings look and
+        // the reference's spirit: an unselected row shows no material).
+        // Sheet rows deliberately keep the radius-11 look (the r38
+        // sidebar row shape); only the folder tabs adopt the radius-10
+        // action shape (r41).
+        .modifier(SidebarGlassSurface(
+            role: glassRole(dropTarget: false, active: isSelected),
+            shape: RoundedRectangle(cornerRadius: 11, style: .continuous)))
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        // One concrete-sheet snapshot serves both destinations: the private
+        // UUID representation moves onto a Numlex folder tab, while the file
+        // representation lets Finder copy an `.nlx` without mutating Numlex.
+        .draggable(SheetDragItem(source: sheet))
+        .contextMenu {
+            // Move to Folder: General + every custom folder; the
+            // current destination is disabled (native menu affordance).
+            Menu(L10n.t("moveToFolder", language: language)) {
+                Button(L10n.t("folderGeneral", language: language)) {
+                    model.moveSheet(id: sheet.id, to: nil)
+                }
+                .disabled(sheet.folderID == nil)
+                ForEach(model.folders) { folder in
+                    Button(folder.title) {
+                        model.moveSheet(id: sheet.id, to: folder.id)
+                    }
+                    .disabled(sheet.folderID == folder.id)
+                }
+            }
+            Button {
+                renamingID = sheet.id
+            } label: {
+                Label(L10n.t("rename", language: language), systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                model.deleteSheet(at: idx)
+            } label: {
+                Label(L10n.t("deleteSheet", language: language), systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func titleView(sheet: Sheet) -> some View {
+        if sheet.id == renamingID {
+            RenameField(initial: sheet.title) { value in
+                model.renameSheet(id: sheet.id, to: value)
+                renamingID = nil
+            } onCancel: {
+                renamingID = nil
+            }
+        } else {
+            Text(sheet.displayTitle(language: model.settings.language))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+}
+
+/// One sheet-row drag value with deliberately separate semantics: Numlex
+/// folder tabs consume only the private UUID representation, while Finder
+/// requests a lazily staged portable `.nlx` snapshot. Decoding the private
+/// representation never grants access to file export data.
+struct SheetDragItem: Codable, Transferable, Sendable {
+    let sheetID: UUID
+    private let exportSnapshot: SheetExport?
+    /// The ONE suggested `.nlx` name of this drag, computed from the
+    /// captured sheet at drag creation. It names the staged file; the
+    /// extensionless base is what the file representation suggests (Finder
+    /// appends the type's own extension to a suggested name).
+    private let exportFilename: String?
+    private let exportSuggestedName: String?
+
+    init(source sheet: Sheet) {
+        sheetID = sheet.id
+        exportSnapshot = SheetExport(snapshotOf: sheet)
+        let base = SheetExport.suggestedFileBase(for: sheet.title)
+        exportFilename = base + ".nlx"
+        exportSuggestedName = base
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sheetID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sheetID = try container.decode(UUID.self, forKey: .sheetID)
+        exportSnapshot = nil
+        exportFilename = nil
+        exportSuggestedName = nil
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sheetID, forKey: .sheetID)
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .numlexSheetMove)
+        FileRepresentation(exportedContentType: .nlx) { item in
+            SentTransferredFile(try item.stageExportFile())
+        }
+        .suggestedFileName { $0.exportSuggestedName }
+    }
+
+    /// Creates a unique transfer-owned staging directory only when a file
+    /// receiver asks for the representation. Finder owns the destination copy
+    /// and collision policy; this source never writes there directly.
+    private func stageExportFile() throws -> URL {
+        guard let exportSnapshot, let exportFilename else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let fileManager = FileManager.default
+        let stagingDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: stagingDirectory,
+                                            withIntermediateDirectories: false)
+            let fileURL = stagingDirectory.appendingPathComponent(exportFilename,
+                                                                   isDirectory: false)
+            let data = try JSONEncoder().encode(exportSnapshot)
+            try data.write(to: fileURL, options: .atomic)
+            return fileURL
+        } catch {
+            try? fileManager.removeItem(at: stagingDirectory)
+            throw error
+        }
+    }
+}
+
+extension UTType {
+    /// The private (app-only) drag type for sheet-to-tab moves.
+    static let numlexSheetMove = UTType(exportedAs: "com.numlex.app.sheet-move")
+}
+
+/// Selection/drop glass. The shape is EXPLICIT so each caller controls
+/// its own corner radius from a single source of truth: sheet rows keep
+/// the radius-11 sidebar-row look, folder tabs pass `folderTabShape`
+/// (radius-7 continuous — proportional to the compact 26 pt row, per
+/// the reference corner ratio; the radius-10 `sidebarButtonShape`
+/// would read as a pill at this height), and the drop/selected layers
+/// always share the SAME shape as the hit/content row (no duplicated
+/// drifting radius literal).
+///
+/// The ONE sidebar glass surface primitive (r52; reworked for the
+/// macOS 26/27 renderer regression).
+///
+/// Every sidebar surface — the New Sheet button, selected sheet rows,
+/// the active General/custom folder tab and the sheet drop target —
+/// renders through this modifier, so there is exactly one glass path:
+///
+///   1. a normal shape FILL of the deterministic wash (Light: 4%
+///      graphite / 12% accent blue; Dark: 10% / 22% white). Alpha is
+///      composited by the ordinary fill path — never interpreted as
+///      tint strength by the new glass renderer;
+///   2. exactly ONE real Liquid Glass surface,
+///      `.glassEffect(.regular.interactive(), in: shape)` — UNTINTED;
+///   3. one 1 pt hairline boundary over the surface (Light only; clear
+///      in Dark), hit-testing off.
+///
+/// The appearance resolves from the SwiftUI environment on every render
+/// (`@Environment(\.colorScheme)`), so a Light/Dark switch can never
+/// keep a cached static color branch.
+///
+/// The LOCAL no-animation transaction is attached to the glass layer
+/// ONLY, never to `content`: the glass appearing/disappearing is a
+/// structural change that would otherwise inherit the list's
+/// transaction and crossfade over the reflow duration (the highlight
+/// appeared to travel between rows). With `animation = nil` on the
+/// layer, the surface switches instantly at the correct row, while the
+/// row frame — and, for a freshly inserted selected row, the whole
+/// composited row including this background — still moves and fades
+/// with the caller's insertion transition and layout animation.
+/// The layer is pure background: it never intercepts row hit-testing.
+struct SidebarGlassSurface: ViewModifier {
+    /// The wash role, or `nil` for "no surface" (an unselected row/tab).
+    var role: SidebarGlassTone.Role?
+    /// The surface shape, passed in — never re-literalized:
+    /// New Sheet radius 10, sheet rows radius 11, folder tabs radius 7.
+    var shape: RoundedRectangle
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content.background {
+            ZStack {
+                if let role {
+                    let isDark = colorScheme == .dark
+                    // 1. the wash: composited by the normal fill path.
+                    shape.fill(Design.sidebarWash(role, isDark: isDark))
+                    // 2. exactly one real, UNTINTED glass surface.
+                    Color.clear
+                        .glassEffect(.regular.interactive(), in: shape)
+                    // 3. one boundary stroke over the surface.
+                    shape
+                        .strokeBorder(Design.sidebarGlassBoundary(isDark: isDark), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
+            .transaction { $0.animation = nil }
+        }
+    }
+}
+
+/// The ONE surface-role mapping shared by every sidebar glass caller:
+/// a drop target always wins, an active/selected surface gets the calm
+/// selected wash, everything else has no surface at all.
+private func glassRole(dropTarget: Bool,
+                       active: Bool) -> SidebarGlassTone.Role? {
+    if dropTarget { return .dropTarget }
+    return active ? .selected : nil
+}
+
+/// Inline rename field: commits on submit or focus loss.
+/// Inline rename field: takes focus immediately with the whole title
+/// selected (type to replace), commits on Return or focus loss, cancels
+/// (restoring the original title) on Escape. NSViewRepresentable so the
+/// selection and the Escape key are under our control.
+private struct RenameField: NSViewRepresentable {
+    let initial: String
+    let onCommit: (String) -> Void
+    let onCancel: () -> Void
+
+    init(initial: String,
+         onCommit: @escaping (String) -> Void,
+         onCancel: @escaping () -> Void = {}) {
+        self.initial = initial
+        self.onCommit = onCommit
+        self.onCancel = onCancel
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = RenameFieldView()
+        field.delegate = context.coordinator
+        field.isBezeled = false
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        field.textColor = .labelColor
+        field.stringValue = initial
+        field.onEscape = { context.coordinator.cancel() }
+        context.coordinator.field = field
+        context.coordinator.onCancel = onCancel
+        DispatchQueue.main.async {
+            guard let window = field.window,
+                  window.makeFirstResponder(field) else { return }
+            // Select the whole title in the field editor so typing
+            // replaces it. (The field itself answers neither the
+            // selectAll: action nor setSelectedRange: until it is the
+            // first responder, so the editor is the right handle.)
+            if let editor = window.fieldEditor(true, for: field) as? NSTextView {
+                editor.setSelectedRange(NSRange(location: 0,
+                                                 length: editor.string.count))
+            }
+        }
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.onCancel = onCancel
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    /// Catches Escape before the field's default handling.
+    final class RenameFieldView: NSTextField {
+        var onEscape: (() -> Void)?
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 53 { // Esc
+                onEscape?()
+                return
+            }
+            super.keyDown(with: event)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: RenameField
+        weak var field: RenameFieldView?
+        var onCancel: () -> Void = {}
+        private var alreadyHandled = false
+
+        init(_ parent: RenameField) { self.parent = parent }
+
+        /// Escape: restore the original title, end editing, no commit.
+        func cancel() {
+            alreadyHandled = true
+            field?.stringValue = parent.initial
+            field?.window?.makeFirstResponder(nil)
+            onCancel()
+        }
+
+        private func currentText() -> String {
+            field?.stringValue ?? parent.initial
+        }
+
+        // MARK: NSTextFieldDelegate
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            // Focus loss (clicking elsewhere) commits, unless Enter or
+            // Escape already handled this edit session.
+            if !alreadyHandled {
+                alreadyHandled = true
+                parent.onCommit(currentText())
+            }
+            alreadyHandled = false
+        }
+    }
+}
+
+/// r42: zero-footprint native scroller suppression for the two sidebar
+/// ScrollViews.
+///
+/// SwiftUI's `.scrollIndicators(.hidden)` is declarative, but on
+/// macOS 26 with the system "Show scroll bars: Always" preference the
+/// backing NSScrollView can still materialize a legacy scroller and a
+/// visible gutter. This representable attaches behind the scroll view,
+/// locates the NSScrollView that actually owns it, and forces the
+/// scrollers off. It is re-applied on mount (viewDidMoveToWindow +
+/// first layout), on EVERY SwiftUI update (updateNSView), and on every
+/// layout pass (layout) so a later SwiftUI reconfiguration cannot
+/// restore them. There is no polling timer and no private API.
+///
+/// Ownership is resolved by WINDOW-SPACE CONTAINMENT (the scroller whose
+/// frame contains this view), not by ancestry: SwiftUI may place the
+/// representable as a sibling of the NSScrollView, and the window also
+/// hosts the editor's own scroll views, which must never be touched.
+/// The view draws nothing, claims no hits (hitTest → nil), adds no
+/// insets, and has no layout footprint (it is a background layer).
+private struct NativeScrollerSuppressor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        return ScrollerSuppressView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ScrollerSuppressView)?.suppress()
+    }
+}
+
+private final class ScrollerSuppressView: NSView {
+    private var scroll: NSScrollView?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Inert by contract: never claim a pointer hit, draw nothing.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var isOpaque: Bool { false }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // The hierarchy (and thus the owning NSScrollView) may not be
+        // complete at attach time — defer one runloop turn.
+        DispatchQueue.main.async { [weak self] in self?.suppress() }
+    }
+
+    override func layout() {
+        super.layout()
+        suppress()
+    }
+
+    func suppress() {
+        // A cached owner that left the hierarchy (SwiftUI tearing the
+        // scroll view down and rebuilding it) is re-resolved.
+        let cached = scroll
+        let target = (cached != nil && cached!.window == window)
+            ? cached
+            : Self.findOwningScrollView(from: self)
+        guard let target else {
+            // Not attached in a window yet — try again on the next
+            // layout/update pass (no busy loop: this only fires on
+            // real layout or SwiftUI update events).
+            return
+        }
+        scroll = target
+        guard target.hasVerticalScroller || target.hasHorizontalScroller
+                || !target.autohidesScrollers
+                || target.scrollerStyle != .overlay else { return }
+        target.hasVerticalScroller = false
+        target.hasHorizontalScroller = false
+        target.autohidesScrollers = true
+        target.scrollerStyle = .overlay
+    }
+
+    /// Find the NSScrollView whose window-space frame contains the
+    /// given view. Containment (not ancestry) keeps this correct
+    /// whether SwiftUI nests the representable inside the scroll view
+    /// or places it beside it, and it can never select the editor's
+    /// scroll views, which do not spatially contain a sidebar view.
+    private static func findOwningScrollView(from view: NSView) -> NSScrollView? {
+        guard let window = view.window,
+              let content = window.contentView else { return nil }
+        let frameInWindow = view.convert(view.bounds, to: nil)
+        for scroller in collectScrollViews(content) {
+            let f = scroller.convert(scroller.bounds, to: nil)
+            if f.contains(frameInWindow) { return scroller }
+        }
+        return nil
+    }
+
+    private static func collectScrollViews(_ view: NSView) -> [NSScrollView] {
+        var found: [NSScrollView] = []
+        if let scroller = view as? NSScrollView { found.append(scroller) }
+        for sub in view.subviews {
+            found.append(contentsOf: collectScrollViews(sub))
+        }
+        return found
+    }
+}

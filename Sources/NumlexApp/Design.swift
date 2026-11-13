@@ -1,0 +1,380 @@
+import SwiftUI
+import AppKit
+import NumlexCore
+
+/// Shared design tokens so typography stays coherent across sidebar,
+/// notebook editor and answer column. The editor base size is driven
+/// by the user's font-size setting; everything else scales from it.
+/// The app uses the native proportional SF system font everywhere.
+enum Design {
+    // MARK: Notebook (editor + answer column share the same rhythm)
+
+    /// Proportional system font for editable notebook text and numeric results.
+    static func body(_ size: Double) -> Font {
+        .system(size: size, weight: .regular)
+    }
+
+    /// Line-number gutter: quiet, proportional tertiary label.
+    static func gutterFont() -> NSFont { NSFont.systemFont(ofSize: 11) }
+    /// Inactive gutter numbers: dim in both dark and light.
+    static var gutterColor: NSColor { .tertiaryLabelColor }
+    /// The gutter number of the line the caret is on: one step brighter.
+    static var gutterColorActive: NSColor { .secondaryLabelColor }
+
+    /// r38: one deterministic per-appearance sRGB provider — EXPLICIT
+    /// full-alpha sRGB values on both branches, resolved through the
+    /// EFFECTIVE appearance. The app pins `NSApp.appearance` centrally
+    /// (AppAppearanceController from the persisted Light/Dark choice),
+    /// so every window, NSTextView and SwiftUI view resolves the same
+    /// branch; no system catalog colors, no Display P3, no opacity
+    /// overlays. Each token below names its exact pair once — the ONE
+    /// RGB source for both themes.
+    private static func adaptive(light: (CGFloat, CGFloat, CGFloat),
+                                 dark: (CGFloat, CGFloat, CGFloat)) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(srgbRed: dark.0 / 255.0, green: dark.1 / 255.0, blue: dark.2 / 255.0, alpha: 1)
+                : NSColor(srgbRed: light.0 / 255.0, green: light.1 / 255.0, blue: light.2 / 255.0, alpha: 1)
+        }
+    }
+
+    /// Hash-heading `#` marker: a deterministic adaptive neutral gray —
+    /// the exact pre-light value in dark (sRGB 185/185/187 on the
+    /// near-black editor) and a readable medium gray in light.
+    static let headingMarkerColor = adaptive(light: (122, 122, 126), dark: (185, 185, 187))
+
+    // MARK: Notebook syntax palette (deterministic sRGB values)
+    //
+    // r38 dual theme: every chromatic token is the exact explicit
+    // sRGB pair for BOTH appearances. LIGHT is the r36 palette on the
+    // white editor: #0070F3 blue (numbers), #46A758 green
+    // (variables/constants), #8E4EC6 purple (units/conversions), the
+    // same blue for comment titles and the same purple for currency
+    // markers. DARK restores the authoritative pre-light palette on
+    // the near-black editor: #99CEFF cyan (numbers), #6CDA76 green
+    // (variables), #BE89EC pink-purple (units), #65BCF6 matte blue
+    // (comment titles) and #C780FF purple (currency markers).
+
+    /// Numeric literals — light #0070F3 (0, 112, 243) / dark #99CEFF
+    /// (153, 206, 255).
+    static let numberColor = adaptive(light: (0, 112, 243), dark: (153, 206, 255))
+    /// Variable identifiers — light #46A758 (70, 167, 88) / dark
+    /// #6CDA76 (108, 218, 118).
+    static let variableColor = adaptive(light: (70, 167, 88), dark: (108, 218, 118))
+    /// Unit words in conversions — light #8E4EC6 (142, 78, 198) / dark
+    /// #BE89EC (190, 137, 236).
+    static let conversionColor = adaptive(light: (142, 78, 198), dark: (190, 137, 236))
+    /// Comment titles — light #0070F3 (0, 112, 243), reusing the number
+    /// blue / dark #65BCF6 (101, 188, 246), the historical matte blue.
+    static let titleColor = adaptive(light: (0, 112, 243), dark: (101, 188, 246))
+
+    /// Currency markers on money lines (`$`, `€`, ISO codes) — light
+    /// #8E4EC6 (142, 78, 198), reusing the unit purple / dark #C780FF
+    /// (199, 128, 255), the historical money purple.
+    /// Package 7: the `#` of a tag and its identifier body (fixed,
+    /// non-configurable semantic roles).
+    static let tagMarkerColor = adaptive(light: (116, 116, 120), dark: (160, 160, 164))
+    static let tagBodyColor = adaptive(light: (142, 78, 198), dark: (190, 137, 236))
+    /// Package 7: the `---` divider rule.
+    static let dividerColor = adaptive(light: (176, 176, 180), dark: (110, 110, 114))
+
+    static let moneyMarkerColor = adaptive(light: (142, 78, 198), dark: (199, 128, 255))
+
+    /// Editor caret: sRGB(52, 120, 247) — fixed accent blue matched to
+    /// the Soulver reference. Constant across appearances; the caret's
+    /// geometry, size, row-box centering and blink are owned by
+    /// NotebookTextView, this token only colors the rect.
+    static let caretColor = NSColor(srgbRed: 52.0 / 255.0, green: 120.0 / 255.0, blue: 247.0 / 255.0, alpha: 1)
+    /// Base text: prose, operators, equals, parentheses, `to`, ANY
+    /// other plain editor text AND every answer/result glyph in the
+    /// answer column and the settings preview. One centralized token —
+    /// never raw white/NSColor.white at a render site. Light: the
+    /// r36 near-black #1C1C1E (28, 28, 30) / Dark: the historical
+    /// fixed white #FFFFFF. Full alpha, deterministic sRGB.
+    static let baseText = adaptive(light: (28, 28, 30), dark: (255, 255, 255))
+
+    // MARK: Answer reference tokens (r23 premium bubble)
+
+    /// Active token base color: the reference sRGB(195, 220, 255).
+    /// Slightly more blue/saturated than the earlier (205, 222, 250)
+    /// while staying light and premium — not neon. The capsule fills
+    /// with a luminous top-leading to bottom-trailing gradient between
+    /// the two alpha stops below — constant across appearances; the
+    /// capsule is its own opaque surface.
+    static let tokenBase = NSColor(srgbRed: 195.0 / 255.0, green: 220.0 / 255.0, blue: 255.0 / 255.0, alpha: 1)
+    static let tokenGradientTopAlpha: CGFloat = 0.98
+    static let tokenGradientBottomAlpha: CGFloat = 0.72
+    /// Near-black label at 85%, composited over the gradient fill.
+    static let tokenText = NSColor.black.withAlphaComponent(0.85)
+    /// 1 pt border gradient (white), top-leading to bottom-trailing.
+    static let tokenBorderTopAlpha: CGFloat = 0.75
+    static let tokenBorderBottomAlpha: CGFloat = 0.18
+    /// Soft top sheen: a ~2 pt white capsule strip fading to clear.
+    static let tokenHighlightAlpha: CGFloat = 0.35
+    static let tokenHighlightHeight: CGFloat = 2
+    /// Soft shadow under the active capsule — the reference's
+    /// black 28% / 14 blur / 7 y scaled down to the editor's ~23 pt
+    /// badge (premium, not neon).
+    static let tokenShadowOpacity: CGFloat = 0.28
+    static let tokenShadowBlur: CGFloat = 6
+    static let tokenShadowOffsetY: CGFloat = 3
+    /// Invalidation inset around a capsule: covers the shadow extent
+    /// (blur + offset) plus the border and sheen.
+    static let tokenInvalidationInset: CGFloat = 20
+
+    // MARK: r77 — token hover ring (restrained, opacity-only emphasis)
+
+    /// Alpha of the soft outer stroke drawn around the hovered capsule
+    /// (multiplied by the live hover-glow ramp 0...1).
+    static let tokenHoverRingAlpha: CGFloat = 0.32
+    /// Stroke width of the hover ring.
+    static let tokenHoverRingWidth: CGFloat = 1.5
+    /// Fixed inset of the ring OUTSIDE the final capsule rect (never
+    /// animated — the ring's extent is constant; only its opacity
+    /// ramps).
+    static let tokenHoverRingInset: CGFloat = 2
+    /// Inactive (broken) token capsule: a quiet dark-gray FLAT surface
+    /// with muted text — no gradient, border, sheen or shadow, so it
+    /// can never read as live, but stays legible on the editor
+    /// background.
+    static let tokenFillInactive = NSColor(srgbRed: 66.0 / 255.0, green: 66.0 / 255.0, blue: 72.0 / 255.0, alpha: 1)
+    static let tokenTextInactive = NSColor(srgbRed: 168.0 / 255.0, green: 168.0 / 255.0, blue: 176.0 / 255.0, alpha: 1)
+    /// Horizontal reservation on EACH side of the label (8 pt, 16 pt
+    /// total) — tightened from the reference bubble's 14 pt per side.
+    /// One constant: the reserved layout width and the drawn capsule
+    /// always agree.
+    static let tokenHPadding: CGFloat = 8
+    /// The ONE token label face: medium rounded system typography with
+    /// monospaced digits (feature-based, falling back to plain rounded
+    /// when the feature cannot be constructed). `applyTokenAttachments`
+    /// (reserved width) and `drawTokenCapsules` (ink) both resolve
+    /// through this, so width and drawing can never disagree.
+    static func tokenFont(size: CGFloat) -> NSFont {
+        // Rounded medium with monospaced digits: the monospaced-digit
+        // system face keeps its even digit advances through the
+        // rounded-design round-trip (verified: .AppleSystemUIFontRounded
+        // with 0 pt advance difference between 1 and 2). If either step
+        // ever fails, the digit-advance check rejects the candidate and
+        // the plain rounded medium wins — the design face is preferred
+        // over the digits.
+        func advance(_ s: String, in font: NSFont) -> CGFloat {
+            (s as NSString).size(withAttributes: [.font: font]).width
+        }
+        func isMonospaced(_ font: NSFont) -> Bool {
+            abs(advance("1", in: font) - advance("2", in: font)) < 0.001
+        }
+        let medium = NSFont.systemFont(ofSize: size, weight: .regular)
+        var rounded: NSFont?
+        if let d = medium.fontDescriptor.withDesign(.rounded),
+           let f = NSFont(descriptor: d, size: size) {
+            rounded = f
+        }
+        let monoBase = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
+        if let d = monoBase.fontDescriptor.withDesign(.rounded),
+           let f = NSFont(descriptor: d, size: size), isMonospaced(f) {
+            return f
+        }
+        if let r = rounded { return r }
+        return medium
+    }
+
+    // MARK: Source-answer hover outline (r37)
+
+    /// Hovering an ACTIVE answer-token capsule strokes a rounded
+    /// rectangle around the SOURCE answer in the answer column (no
+    /// fill, stroke only). The color is the reference/caret blue
+    /// (Design.caretColor, #3478F7) — one centralized accent, constant
+    /// across appearances and readable on BOTH answer panels. The
+    /// geometry constants below are the
+    /// ONLY tuning knobs (tuned against the reference screenshot in QA).
+    static let answerHoverLineWidth: CGFloat = 3
+    /// Restrained continuous corners: the outline reads as a rounded
+    /// rectangle around the answer, never as a pill/capsule.
+    static let answerHoverCornerRadius: CGFloat = 7
+    /// Horizontal inset from the panel edge: near-full-width stroke.
+    static let answerHoverEdgeInset: CGFloat = 2
+
+    // MARK: Panel surfaces
+
+    /// Notebook editor background — applied to the NSTextView, the
+    /// SwiftUI editor host and the settings preview from this ONE
+    /// token. Light: the r36 native white #FFFFFF (1, 1, 1) / Dark: the
+    /// exact historical near-black #1E1E1E (30, 30, 30) — the runtime
+    /// value of the editor's pre-r36 `.textBackgroundColor` on the
+    /// pinned dark appearance.
+    static let editorBackground = adaptive(light: (255, 255, 255), dark: (30, 30, 30))
+
+    /// Answer panel background: a quiet elevated gray visibly distinct
+    /// from the editor — explicit sRGB per appearance so the value is
+    /// deterministic instead of a dynamic system catalog color. Dark:
+    /// #262628 (38, 38, 40) — the historical value, just above the
+    /// dark editor / Light: #ECECEE (236, 236, 238) — quiet gray
+    /// against the editor's white. Applied ONLY to the answer column.
+    static let answerPanelBackground = adaptive(light: (236, 236, 238), dark: (38, 38, 40))
+
+    // MARK: r87 — answer-column surfaces and line highlights
+    //
+    // ONE centralized resolver per role (the app-side counterpart of
+    // the `StylingPreferences` choices): explicit full-alpha sRGB
+    // LIGHT/DARK pairs on both branches, so both themes resolve the
+    // same deterministic values and no view ever invents a color.
+    // `.neutral` is the exact pre-r87 panel. The answer GLYPH color
+    // stays `Design.baseText` on every surface (contrast-safe by
+    // construction: the near-black base on the quiet light surfaces,
+    // the white base on the dark ones) — no ad-hoc per-view colors.
+
+    /// The answer column surface for the styling choice (`neutral` =
+    /// the pre-r87 `answerPanelBackground`).
+    static func answerSurfaceColor(_ surface: AnswerColumnSurface) -> NSColor {
+        switch surface {
+        case .neutral: return answerPanelBackground
+        case .sand:
+            return adaptive(light: (242, 238, 231), dark: (44, 42, 38))
+        case .slate:
+            return adaptive(light: (234, 237, 240), dark: (37, 40, 44))
+        case .sage:
+            return adaptive(light: (233, 238, 234), dark: (38, 43, 39))
+        case .blush:
+            return adaptive(light: (241, 235, 235), dark: (44, 39, 39))
+        }
+    }
+
+    /// The persistent per-line highlight FILL for the editor and the
+    /// answer pane (the same color both sides resolve). Subtle
+    /// full-alpha tints: legible on the editor background in both
+    /// themes while syntax colors, selections, token capsules and
+    /// hover rings all draw above the fill.
+    static func highlightFill(_ color: HighlightColor) -> NSColor {
+        switch color {
+        case .yellow:
+            return adaptive(light: (252, 243, 201), dark: (58, 54, 33))
+        case .orange:
+            return adaptive(light: (252, 232, 213), dark: (58, 46, 33))
+        case .green:
+            return adaptive(light: (222, 240, 224), dark: (34, 50, 37))
+        case .blue:
+            return adaptive(light: (220, 233, 248), dark: (32, 43, 56))
+        case .purple:
+            return adaptive(light: (236, 228, 246), dark: (47, 41, 55))
+        case .pink:
+            return adaptive(light: (247, 226, 236), dark: (56, 38, 49))
+        }
+    }
+
+    /// Sidebar column surface (Golden Gate fix): EXACTLY the editor
+    /// surface in both appearances — never `.windowBackground`, a
+    /// material, or a translucent fill, so the OS sidebar tint cannot
+    /// show through. Applied as the outer column background (with
+    /// safe-area expansion so it fills the traffic-light/titlebar
+    /// strip where the NavigationSplitView sidebar extends), never as
+    /// an interior padded-layer fill. The glass pills/tabs float above
+    /// this base unchanged.
+    static var sidebarBackground: NSColor { editorBackground }
+
+    /// Thin vertical panel separators (sidebar|editor and
+    /// editor|answers): the system separator, subtle on both
+    /// `editorBackground` and `answerPanelBackground`. A centralized
+    /// token so both hairlines match; resolved via Color(nsColor:)
+    /// so they repaint live on Light/Dark switch.
+    static var panelSeparator: NSColor { .separatorColor }
+
+    // MARK: Sidebar glass wash (r52 / fixed for the Tahoe renderer)
+    //
+    /// The sidebar surfaces draw ONE untinted Liquid Glass layer with a
+    /// deterministic *wash* as a normal shape fill underneath. The wash
+    /// never goes through `Glass.tint`: on macOS 26/27 the new renderer
+    /// interpreted an alpha-bearing tint as tint strength and turned the
+    /// 4% Light graphite wash into a near-solid gray (~RGB 96) on some
+    /// surfaces while others kept a different resolution.
+    ///
+    /// Resolution is per render: callers pass the SwiftUI environment's
+    /// `colorScheme`, so a Light/Dark switch can never keep a cached
+    /// static branch. The RGBA VALUES live in NumlexCore
+    /// (`SidebarGlassTone`) so the semantics stay unit tested.
+    static func sidebarWash(_ role: SidebarGlassTone.Role, isDark: Bool) -> Color {
+        let t = SidebarGlassTone.wash(role, isDark: isDark)
+        return Color(.sRGB, red: t.red, green: t.green, blue: t.blue, opacity: t.alpha)
+    }
+
+    /// Hairline that follows each existing glass shape (stroke only —
+    /// never a second material). Light: 10% dark 1 pt boundary so the
+    /// 4% wash reads against pure white; Dark: clear, leaving the
+    /// historical white glass visually unchanged.
+    static func sidebarGlassBoundary(isDark: Bool) -> Color {
+        let t = SidebarGlassTone.boundary(isDark: isDark)
+        return Color(.sRGB, red: t.red, green: t.green, blue: t.blue, opacity: t.alpha)
+    }
+
+    // MARK: Editor geometry
+
+    /// Top inset of the notebook text (matches the answer column's
+    /// content origin, keeping both columns aligned without compensation).
+    static let editorTopInset: CGFloat = 6
+    /// Width of the quiet line-number gutter inside the text view.
+    static let gutterWidth: CGFloat = 36
+    /// Distance from the gutter to the first text column. Raising it
+    /// moves the text start right WITHOUT moving the numbers, because
+    /// the numbers are anchored to `gutterNumberRight` instead.
+    static let textLeading: CGFloat = 18
+    /// Right edge of the gutter numbers, decoupled from the text start
+    /// so the number-to-text gap can be tuned independently.
+    static let gutterNumberRight: CGFloat = 42
+
+    /// r89: THE one source of truth for the editor text's head indent
+    /// (first line and continuation lines alike). Line numbers ON
+    /// reserves the gutter (36 + 18 = 54, byte-compatible with the
+    /// legacy layout); OFF reclaims the hidden gutter (18), moving the
+    /// text exactly `gutterWidth` closer to the sidebar.
+    static func textIndent(lineNumbers: Bool) -> CGFloat {
+        (lineNumbers ? gutterWidth : 0) + textLeading
+    }
+
+    // MARK: Labels (native proportional scales)
+
+    static let label: Font = .system(size: 13)       // sidebar titles / controls
+    static let labelSmall: Font = .system(size: 11)  // metadata
+}
+
+/// r77 — the ONE shared motion policy for the app's micro-animations.
+/// MOST of what lives here is a short opacity/color-only pass: no geometry,
+/// no bounces, no numeric tweens. The calm native notebook should feel
+/// alive, not like a demo. The single narrow exception is `footerMode`
+/// below, which animates the footer Total bubble's own width when the
+/// compact/expanded mode flips — one numeric width, no bounce, no overshoot,
+/// no scale and no tween of the number. Durations are the single source of
+/// truth — SwiftUI (answers, totals, hovers) and the TextKit token pass read
+/// from here; `TokenAppearance.duration` and
+/// `AnswerAppearance.duration` are the AppKit/clock-injected twins of
+/// the two token/answer appearance durations.
+enum Motion {
+    /// Fade-in of a freshly computed answer row (new line the user
+    /// typed): restrained, fast-out.
+    static let answerIn: Double = AnswerAppearance.duration
+    /// Crossfade of a CHANGED displayed answer (re-evaluation, rounding
+    /// change, region change) and of the footer Total value.
+    static let answerChange: Double = 0.12
+    /// Source-answer hover outline + token hover ring (opacity/color
+    /// only; no geometry, focus or scroll changes).
+    static let hover: Double = 0.12
+    /// Token (bubble) appearance pass — the shared twin of
+    /// `TokenAppearance.duration`/`startScale`.
+    static let tokenIn: Double = TokenAppearance.duration
+    /// The footer Total bar's compact/expanded transition — the ONE short
+    /// GEOMETRY exception to the notebook's otherwise opacity/colour-only
+    /// micro-motion policy. The glass bubble's own width shrinks to (and
+    /// grows back from) the value-only width from its LEADING edge while the
+    /// trailing edge stays anchored, so the surface reads as one calm move
+    /// rather than a jump. It is deliberately non-spring (no bounce,
+    /// overshoot or numeric tween), it is keyed ONLY on the binary mode flip —
+    /// never on the continuously changing container width, so dragging the
+    /// answer column divider is not animated per pixel — and Reduce Motion
+    /// replaces it with the final geometry immediately.
+    static let footerMode: Double = 0.22
+
+    /// Whether the OS Reduce Motion is currently on (live source for
+    /// the AppKit passes; SwiftUI reads `\.accessibilityReduceMotion`,
+    /// which the system keeps in lockstep with this flag).
+    static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+}

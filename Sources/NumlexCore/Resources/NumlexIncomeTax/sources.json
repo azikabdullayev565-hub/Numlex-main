@@ -1,0 +1,25 @@
+{
+  "attribution": "National tax schedules compiled by Numlex from the official sources listed per country (factual data).",
+  "generator": "Scripts/generate-income-tax-data.py",
+  "license": "Factual public data; the compiled dataset is CC0.",
+  "resources": {
+    "income-tax.json": {
+      "sha256": "988f0fc0b4e003c8dcf89cbc463742613affd20c22163fbd0c6529cde11e4251"
+    }
+  },
+  "snapshotDate": "2026-09-12",
+  "taxPeriods": {
+    "AU": "2026-27",
+    "CA": "2026",
+    "DE": "2026",
+    "FR": "2026 (income 2025)",
+    "GB": "2026/27",
+    "IN": "FY 2026-27 (AY 2027-28)",
+    "JP": "2026",
+    "NL": "2026",
+    "RU": "2026",
+    "US": "2026"
+  },
+  "unverifiedFor2026": [],
+  "version": "income-tax-2026.2"
+}

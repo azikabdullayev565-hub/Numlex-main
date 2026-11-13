@@ -1,0 +1,91 @@
+// swift-tools-version: 6.0
+import PackageDescription
+import Foundation
+
+// The Swift Testing framework ships with the macOS developer toolchain under
+// .../Library/Developer/Frameworks, but SwiftPM does not add that search path
+// automatically when building with raw Command Line Tools. Locate it so the
+// test target compiles (and links) on both CLTools and full Xcode.
+let testingFrameworks: String? = {
+    let env = ProcessInfo.processInfo.environment["NUMLEX_TESTING_FRAMEWORKS"]
+    let candidates = ([env] + [
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "/Applications/Xcode.app/Contents/Developer/Library/Frameworks",
+    ]).compactMap { $0 }
+    return candidates.first { FileManager.default.fileExists(atPath: "\($0)/Testing.framework") }
+}()
+
+let testingFlags: [String] = testingFrameworks.map { ["-F", $0, "-framework", "Testing"] } ?? []
+let testingSwiftSettings: [SwiftSetting] = testingFlags.isEmpty ? [] : [.unsafeFlags(testingFlags)]
+let testingLinkerSettings: [LinkerSetting] = testingFlags.isEmpty ? [] : [.unsafeFlags(testingFlags)]
+
+let package = Package(
+    name: "Numlex",
+    platforms: [
+        .macOS("26.0")
+    ],
+    products: [
+        .executable(name: "Numlex", targets: ["NumlexApp"]),
+        .library(name: "NumlexCore", targets: ["NumlexCore"]),
+    ],
+    dependencies: [
+        // Secure in-app updates. Pinned to the exact stable release the
+        // update contract was written against (no beta).
+        // The binary target is Sparkle's official
+        // Sparkle-for-Swift-Package-Manager.xcframework artifact.
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
+    ],
+    targets: [
+        .target(
+            name: "NumlexCore",
+            path: "Sources/NumlexCore",
+            resources: [
+                .copy("Resources/NumlexTimezones"),
+                .copy("Resources/NumlexHolidays"),
+                .copy("Resources/NumlexIncomeTax"),
+                .copy("Resources/NumlexCPI"),
+                .copy("Resources/NumlexTax")
+            ]
+        ),
+        .executableTarget(
+            name: "NumlexApp",
+            dependencies: [
+                "NumlexCore",
+                // Only the app links Sparkle; the core stays dependency-free.
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
+            path: "Sources/NumlexApp",
+            // Consumed by Scripts/build-app.sh when assembling Numlex.app.
+            exclude: ["Resources/Info.plist", "Resources/AppIcon.icns"],
+            // The alternate app icon + the two Settings preview tiles must
+            // be reachable at runtime. `.copy` keeps the bytes identical
+            // (the loader prefers Bundle.main in a packaged app and falls
+            // back to Bundle.module under `swift run`).
+            resources: [
+                .copy("Resources/AppIconLight.icns"),
+                .copy("Resources/AppIconDarkPreview.png"),
+                .copy("Resources/AppIconLightPreview.png"),
+            ]
+        ),
+        // Shared, portable test cases (no test-framework dependency).
+        .target(
+            name: "NumlexTestKit",
+            dependencies: ["NumlexCore"],
+            path: "Tests/NumlexTestKit"
+        ),
+        // Swift Testing suite: `swift test` on a full Xcode toolchain.
+        .testTarget(
+            name: "NumlexCoreTests",
+            dependencies: ["NumlexCore", "NumlexTestKit"],
+            path: "Tests/NumlexCoreTests",
+            swiftSettings: testingSwiftSettings,
+            linkerSettings: testingLinkerSettings
+        ),
+        // Standalone runner for CLTools-only machines: `swift run NumlexTests`.
+        .executableTarget(
+            name: "NumlexTests",
+            dependencies: ["NumlexTestKit"],
+            path: "Tests/NumlexTests"
+        ),
+    ]
+)

@@ -1,0 +1,23 @@
+import Foundation
+import NumlexTestKit
+
+// Standalone test runner for toolchains without the XCTest/Swift Testing
+// runtime wired into SwiftPM (e.g. Command Line Tools only). Executes the
+// exact same cases as the Swift Testing suite and exits non-zero on failure:
+//
+//     swift run NumlexTests
+
+import Foundation
+let allCases = engineCases + sheetCases + syntaxCases + formatCases + settingsCases + caretCases + baselineCases + spaceTypingCases + conversionCases + deletionCases + overflowCases + answerReferenceCases + unitCatalogCases + richConversionCases + rateTableCases + rateServiceCases + moneyCases + dateCases + moneyAssignmentCases + r18Cases + r18FormatCases + r18AnimationCases + r19OperatorCases + r19GroupCases + r19PrevAnswerCases + r19IdentityCases + r19SettingsCases + r19RefFixCases + windowGeometryCases + stylingCases + syntaxRoleCases + r32Cases + r33Cases + r35Cases + r37Cases + r38Cases + r39Cases + r40Cases + r41Cases + r43Cases + r44Cases + r47Cases + r51Cases + glassToneCases + r53Cases + r54Cases + r55Cases + r56Cases + r57Cases + r58Cases + r59Cases + r61Cases + r62Cases + r73Cases + r77MotionCases + r80Cases + r82Cases + r83Cases + r84Cases + r85Cases + r87Cases + r88Cases + r89Cases + footerTotalCases + footerTotalLayoutCases + currencyCases + appIconAppearanceCases + settingsNavigationCases + updateCases + plainDMGCases + welcomeCases + durationCases + compoundUnitCases + temporalCases + temporalCorpusCases + clockCases + timezoneCatalogCases + timezoneLaneCases + timezoneSettingsCases + timestampCases + timespanCases + timecodeCases + workCalendarCases + specialDateCases + financeCases + pdfExportCases + package7Cases + answerColumnWidthCases + resourceLocatorCases + totalLastCases + notebookFontCases + linkedConversionCases + sheetExportCases + sheetBehaviorCases + floatingTotalCases + autoConvertCases + weatherMetricCases + minimalModeCases + windowStartupCases + answerTokenAdditionCases
+var failures = 0
+for testCase in allCases {
+    do {
+        try testCase.body()
+        print("✓ \(testCase.name)")
+    } catch {
+        failures += 1
+        print("✗ \(testCase.name): \(error)")
+    }
+}
+print("\(allCases.count - failures)/\(allCases.count) engine cases passed")
+exit(failures == 0 ? 0 : 1)

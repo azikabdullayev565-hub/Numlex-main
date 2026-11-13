@@ -1,0 +1,92 @@
+# Build the modern (Xcode 26 / Liquid Glass) Numlex app icons from the
+# two tracked Icon Composer packages: Assets/AppIcon.icon (primary,
+# CFBundleIconName=AppIcon) and Assets/AppIconLight.icon (alternate,
+# compiled into the SAME Assets.car via --alternate-app-icon so the app
+# can switch its Dock/App Switcher icon through NSImage(named:)).
+#
+# Manual re-run instructions (artifact is NOT a release):
+#   UI:      GitHub repo → Actions → "Build Modern App Icon" → Run workflow
+#   CLI:     gh workflow run build-modern-app-icon.yml
+#   On the `ci/modern-app-icon` bootstrap branch this workflow also
+#   triggers on push (so it can run the first time, before it exists
+#   on main); on main it is manual-only.
+#
+# Artifacts (7-day retention): Assets.car, actool partial Info.plist,
+# assetutil car inventory, ictool/actool logs and tool versions.
+name: Build Modern App Icon
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/modern-app-icon
+      - ci/light-modern-app-icon
+    paths:
+      - .github/workflows/build-modern-app-icon.yml
+      - Scripts/compile-modern-app-icon.sh
+      - Scripts/validate-icon-sources.sh
+      - Assets/AppIcon.icon/**
+      - Assets/AppIconLight.icon/**
+      - Assets/AppIcon.compiled/**
+
+concurrency:
+  group: build-modern-app-icon-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  compile-icon:
+    name: Compile modern app icon (Xcode 26)
+    runs-on: macos-26
+    steps:
+      - name: Select Xcode 26.6
+        shell: bash
+        run: |
+          if [ -d /Applications/Xcode_26.6.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          fi
+          sudo xcodebuild -license accept >/dev/null 2>&1 || true
+          xcodebuild -version
+          xcode-select -p
+          XVER="$(xcodebuild -version | awk '/Xcode/{print $2}')"
+          case "${XVER%%.*}" in
+            2[6-9]|3[0-9]) : ;;
+            *) echo "FATAL: Xcode 26+ required, found $XVER" >&2; exit 1 ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Calibrate the Icon Composer sources (Dark exact, Light bounded)
+        shell: bash
+        run: |
+          # Local renderer gate: the Same Icon Composer engine the packaged
+          # renditions come from. Dark must be byte-identical to the
+          # supplied preview; Light must keep the exact alpha geometry with
+          # a bounded RGB tolerance.
+          bash Scripts/validate-icon-sources.sh
+
+      - name: Compile Assets.car (primary + alternate in one actool pass)
+        shell: bash
+        run: |
+          bash Scripts/compile-modern-app-icon.sh \
+            "${{ github.workspace }}/Assets/AppIcon.icon" \
+            "${{ runner.temp }}/modern-icon-out"
+
+      - name: Upload icon artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: numlex-modern-app-icon
+          path: |
+            ${{ runner.temp }}/modern-icon-out/Assets.car
+            ${{ runner.temp }}/modern-icon-out/Assets.car-partial.plist
+            ${{ runner.temp }}/modern-icon-out/Assets.car.assetutil-info.txt
+            ${{ runner.temp }}/modern-icon-out/icon-build-metadata.json
+            ${{ runner.temp }}/modern-icon-out/appicon-manifest.json
+            ${{ runner.temp }}/modern-icon-out/alticon-manifest.json
+            ${{ runner.temp }}/modern-icon-out/ictool.log
+            ${{ runner.temp }}/modern-icon-out/actool.log
+            ${{ runner.temp }}/modern-icon-out/xcode-version.txt
+          retention-days: 7

@@ -1,0 +1,533 @@
+import Foundation
+
+public enum AppLanguage: String, Codable, CaseIterable, Sendable {
+    case en, ru, de, fr, it, zh
+}
+
+/// r38/r97: the app-wide native appearance. Persisted in the store (the
+/// single source of truth — no separate UserDefaults key). Raw values
+/// are stable (`system`, `light`, `dark`); a FRESH install defaults to
+/// `.system` (Auto follows macOS live), while a LEGACY store without the
+/// key still decodes to `.light` (the r36 permanent-light behavior), so
+/// existing stores keep behaving exactly as before.
+public enum AppAppearance: String, Codable, CaseIterable, Sendable, Equatable {
+    /// Follow the macOS appearance: the app sets `NSApp.appearance = nil`
+    /// and the SwiftUI root applies NO `preferredColorScheme`, so system
+    /// changes flow live into the chrome, menus, glass and TextKit.
+    case system
+    case light, dark
+
+    /// The Settings picker order (Auto, Light, Dark). Raw values are the
+    /// stable persisted spellings (`system`/`light`/`dark`); `light` and
+    /// `dark` keep their historical raw values byte-for-byte.
+    public static let uiOrder: [AppAppearance] = [.system, .light, .dark]
+
+    /// The pinned color-scheme override: `nil` for Auto (follow the
+    /// system), `true` for Dark, `false` for Light. Deliberately
+    /// optional — a two-way ternary would silently map every non-light
+    /// value to dark, which is exactly the bug Auto must not have. The
+    /// app layer maps this to SwiftUI's `ColorScheme`; the core stays
+    /// UI-framework free.
+    public var colorSchemeIsDarkOverride: Bool? {
+        switch self {
+        case .system: return nil
+        case .light: return false
+        case .dark: return true
+        }
+    }
+
+    /// The EFFECTIVE light/dark resolution for the AppKit-backed editor:
+    /// Auto resolves through the process appearance, pinned modes are
+    /// themselves.
+    public func effectiveIsDark(processIsDark: Bool) -> Bool {
+        switch self {
+        case .system: return processIsDark
+        case .light: return false
+        case .dark: return true
+        }
+    }
+}
+
+/// The app-global Dock/App Switcher icon choice. `dark` is the default and
+/// the bundle's modern primary icon (Assets.car + the AppIcon.icns fallback);
+/// `light` is the alternate ICNS shipped in the app resources. The choice is
+/// color/image only — it never affects the Finder bundle icon, the code
+/// signature or any document.
+public enum AppIconChoice: String, Codable, CaseIterable, Sendable, Equatable {
+    case dark
+    case light
+
+    /// The Settings picker order (Dark first: it is the default).
+    public static let uiOrder: [AppIconChoice] = [.dark, .light]
+
+    /// Tolerant decode: a missing key (legacy store) or a malformed raw
+    /// value falls back to the default `.dark` instead of failing the store.
+    public static func resolve(_ raw: String?) -> AppIconChoice {
+        guard let raw, let v = AppIconChoice(rawValue: raw.lowercased()) else { return .dark }
+        return v
+    }
+}
+
+
+/// What the app selects when a window opens onto an existing store.
+/// Additive app-global preference: `lastEdited` (the default) opens the
+/// most recently edited sheet, `newSheet` creates a fresh sheet at launch
+/// instead. Raw values are stable persisted spellings; a missing key, an
+/// unknown raw value or a wrong JSON type falls back to the default
+/// independently, so the store can never fail to decode and the payload
+/// version is NOT bumped.
+public enum LaunchSheetBehavior: String, Codable, CaseIterable, Sendable, Equatable {
+    case lastEdited
+    case newSheet
+
+    /// The Settings picker order.
+    public static let uiOrder: [LaunchSheetBehavior] = [.lastEdited, .newSheet]
+
+    public static func resolve(_ raw: String?) -> LaunchSheetBehavior {
+        guard let raw, let v = LaunchSheetBehavior(rawValue: raw) else { return .lastEdited }
+        return v
+    }
+}
+
+/// What ⌘N does. Additive app-global preference: `newSheet` (the default,
+/// every build before this one) creates a sheet in the current window,
+/// `newWindow` opens another window onto the SAME shared model instead.
+public enum CommandNBehavior: String, Codable, CaseIterable, Sendable, Equatable {
+    case newSheet
+    case newWindow
+
+    /// The Settings picker order.
+    public static let uiOrder: [CommandNBehavior] = [.newSheet, .newWindow]
+
+    public static func resolve(_ raw: String?) -> CommandNBehavior {
+        guard let raw, let v = CommandNBehavior(rawValue: raw) else { return .newSheet }
+        return v
+    }
+}
+
+/// The content a freshly created sheet starts with. Additive app-global
+/// preference; the default `regularLine` reproduces every earlier build
+/// byte-for-byte (an empty document, caret at 0).
+public enum NewSheetStart: String, Codable, CaseIterable, Sendable, Equatable {
+    case regularLine
+    case heading
+
+    /// The Settings picker order.
+    public static let uiOrder: [NewSheetStart] = [.regularLine, .heading]
+
+    public static func resolve(_ raw: String?) -> NewSheetStart {
+        guard let raw, let v = NewSheetStart(rawValue: raw) else { return .regularLine }
+        return v
+    }
+}
+
+/// The sidebar's sheet order inside the active folder. Purely a
+/// PRESENTATION order: the persisted `sheets` array keeps its global
+/// order, so selection, deletion, folder movement and token identity are
+/// untouched. Additive and failure-proof like the other behavior
+/// preferences.
+public enum SidebarSortOrder: String, Codable, CaseIterable, Sendable, Equatable {
+    /// Newest edit first.
+    case dateEdited
+    /// Newest creation first.
+    case dateCreated
+    /// Localized-standard ascending title.
+    case name
+
+    /// The Settings picker order.
+    public static let uiOrder: [SidebarSortOrder] = [.dateEdited, .dateCreated, .name]
+
+    public static func resolve(_ raw: String?) -> SidebarSortOrder {
+        guard let raw, let v = SidebarSortOrder(rawValue: raw) else { return .dateEdited }
+        return v
+    }
+}
+
+/// Settings → Numbers ▸ Auto-convert single units. Additive app-global
+/// preference: `off` (the default) is byte-for-byte the previous
+/// evaluation, `localUnits` converts a strict stand-alone physical
+/// quantity to the local measurement system derived from the macOS
+/// locale. The converted value/unit is what the answer, copy, tokens,
+/// aggregates, footer and export observe; the source text is never
+/// rewritten and nothing here enters `.nlx`.
+public enum AutoConvertUnits: String, Codable, CaseIterable, Sendable, Equatable {
+    case off
+    case localUnits
+
+    /// The Settings picker order (Off first: it is the default).
+    public static let uiOrder: [AutoConvertUnits] = [.off, .localUnits]
+
+    /// Tolerant decode: a missing key (legacy store) or an unknown raw
+    /// value falls back to `off`.
+    public static func resolve(_ raw: String?) -> AutoConvertUnits {
+        guard let raw, let v = AutoConvertUnits(rawValue: raw) else { return .off }
+        return v
+    }
+}
+
+/// The six configurable input behaviors (r19). Nested inside
+/// `AppSettings`; every key is optional on decode, so stores written by
+/// older versions (missing the whole `input` object) fall back to the
+/// defaults instead of failing.
+public struct InputPreferences: Codable, Equatable, Sendable {
+    /// Pad binary operators with one space on each side (`1+1` becomes `1 + 1`).
+    public var padOperators: Bool
+    /// Replace ASCII `*` with `×` in input formatting.
+    public var replaceAsterisk: Bool
+    /// Replace a backtick with `+` in math/natural numeric context.
+    public var replaceBacktick: Bool
+    /// Map completed digit-bounded p/m/x/d to + / - / × / ÷ operators.
+    public var quickOperators: Bool
+    /// Group typed integer parts with thousand separators.
+    public var groupNumbers: Bool
+    /// Insert the last answerable line as a token when an operator is
+    /// typed on a new line.
+    public var insertPreviousAnswer: Bool
+
+    public init(padOperators: Bool, replaceAsterisk: Bool, replaceBacktick: Bool,
+                quickOperators: Bool, groupNumbers: Bool, insertPreviousAnswer: Bool) {
+        self.padOperators = padOperators
+        self.replaceAsterisk = replaceAsterisk
+        self.replaceBacktick = replaceBacktick
+        self.quickOperators = quickOperators
+        self.groupNumbers = groupNumbers
+        self.insertPreviousAnswer = insertPreviousAnswer
+    }
+
+    /// Every key is optional on decode: a partially written `input`
+    /// object (or an old store missing the whole object) falls back
+    /// key-by-key to the r19 defaults instead of failing.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        padOperators = try c.decodeIfPresent(Bool.self, forKey: .padOperators) ?? InputPreferences.defaults.padOperators
+        replaceAsterisk = try c.decodeIfPresent(Bool.self, forKey: .replaceAsterisk) ?? InputPreferences.defaults.replaceAsterisk
+        replaceBacktick = try c.decodeIfPresent(Bool.self, forKey: .replaceBacktick) ?? InputPreferences.defaults.replaceBacktick
+        quickOperators = try c.decodeIfPresent(Bool.self, forKey: .quickOperators) ?? InputPreferences.defaults.quickOperators
+        groupNumbers = try c.decodeIfPresent(Bool.self, forKey: .groupNumbers) ?? InputPreferences.defaults.groupNumbers
+        insertPreviousAnswer = try c.decodeIfPresent(Bool.self, forKey: .insertPreviousAnswer) ?? InputPreferences.defaults.insertPreviousAnswer
+    }
+}
+
+extension InputPreferences {
+    /// The r19 defaults for new stores and the settings screen.
+    public static let defaults = InputPreferences(
+        padOperators: true,
+        replaceAsterisk: true,
+        replaceBacktick: false,
+        quickOperators: true,
+        groupNumbers: true,
+        insertPreviousAnswer: true
+    )
+
+    /// The exact pre-r19 behavior: the hardcoded canonicalization with no
+    /// QuickOperators and no grouping. Used for the one-time v1 store
+    /// migration so old sheets get exactly what the legacy app did.
+    public static let legacy = InputPreferences(
+        padOperators: true,
+        replaceAsterisk: true,
+        replaceBacktick: false,
+        quickOperators: false,
+        groupNumbers: false,
+        insertPreviousAnswer: true
+    )
+}
+
+public struct AppSettings: Codable, Equatable, Sendable {
+    public var decimalPlaces: Int // 2..10
+    public var fontSizeKey: String // ttt..tth maps to sizes
+    public var language: AppLanguage
+    public var sheetName: String
+    public var lineNumbers: Bool
+    /// r60: hide the native sidebar toolbar button while the sidebar
+    /// is collapsed (reopen via Control-Command-S). Default OFF.
+    public var hideSidebarButtonWhenCollapsed: Bool
+    /// r80: show the sheet's bottom Total panel under the answer
+    /// column. Default ON (the pre-r80 layout). OFF removes only that
+    /// panel and its reserved space — inline total lines keep
+    /// evaluating and rendering as before.
+    public var showTotalBar: Bool
+    public var fontColor: String // legacy
+    public var input: InputPreferences
+    /// r21: notebook styling (font design + role colors). The fontSizeKey
+    /// above stays the single size source; this section owns its UI.
+    public var styling: StylingPreferences
+    /// r33: GLOBAL user-defined constants, available live in every
+    /// sheet (never embedded in `.nlx` exports). Source expressions
+    /// only — no computed snapshots.
+    public var customConstants: [UserConstant]
+    /// r38: the app-wide Light/Dark/Auto appearance (persisted; the
+    /// authoritative source for the one NSApp.appearance application).
+    public var appearance: AppAppearance
+    /// The app-global Dock/App Switcher icon choice (persisted; the
+    /// authoritative source for the one NSApp.applicationIconImage
+    /// application). Additive: a missing key or a malformed value falls
+    /// back to `.dark`, the modern bundle primary. Never in `.nlx`.
+    public var appIcon: AppIconChoice
+    /// r73: the regional number settings. `nil` means the store has
+    /// no `regional` key at all — the PRE-r73 legacy store — and the
+    /// app keeps the pre-r73 US behavior (decimal `.`, grouping `,`,
+    /// display always grouped) byte-for-byte. A present block resolves
+    /// through `NumberFormatContext.resolve`; writing the regional
+    /// tab on a legacy store promotes it to `RegionalNumberPreferences`
+    /// (its defaults reproduce the legacy scale: system region is the
+    /// OS locale, grouping on, compact off, paste conversion off).
+    public var regional: RegionalNumberPreferences?
+    /// r84: the GLOBAL custom units (name + definition source rows),
+    /// available live in every sheet, app-global (never embedded in
+    /// `.nlx` exports). Bounded to `UnitResolver.maxRows` (100) by the
+    /// UI and classified per pass by `UnitResolver`.
+    public var customUnits: [UserUnitDefinition]
+    /// r87: the GLOBAL number presentation preferences (default
+    /// notation, custom pattern, fraction denominator preset, negative
+    /// style, currency placement). App-global — never in `.nlx`.
+    /// Defaults reproduce the pre-r87 presentation byte-for-byte.
+    public var presentation: NumberPresentationPreferences
+    /// Temporal preferences (work hours, holiday region, custom timezones).
+    /// Additive and app-global — never in `.nlx`, and `StorePayload.version`
+    /// is NOT bumped: a missing key, a malformed block or a wrong JSON type
+    /// falls back to the defaults.
+    public var temporal: TemporalPreferences
+    /// Package 2: the app-global sales-tax configuration. Additive and
+    /// failure-proof exactly like `temporal`: a missing key, a malformed
+    /// block or a wrong JSON type falls back to the defaults, the payload
+    /// version is NOT bumped and nothing here enters `.nlx`.
+    public var tax: TaxPreferences
+    /// Package 7: the floating footer statistic (sum/average/count/
+    /// median). Additive and failure-proof: a missing key or a malformed
+    /// value falls back to `.sum` and nothing here enters `.nlx`.
+    public var footerStatistic: FooterStatistic
+    /// The main window's frame (position AND size) as last left by the
+    /// user. `nil` means "never saved" — a legacy store, or a frame that
+    /// was rejected as unusable/off-screen. Additive and failure-proof: a
+    /// missing key, a malformed block, a wrong JSON type or a
+    /// non-finite/zero/negative size all decode to `nil`, so the app keeps
+    /// its centered 800x600 default. `StorePayload.currentVersion` is NOT
+    /// bumped and nothing is migrated; app-global, never in `.nlx`.
+    public var windowFrame: SavedWindowFrame?
+    /// Whether the main window's sidebar is shown. Defaults to `true`,
+    /// the expanded sidebar every build before this one launched with, so
+    /// a legacy store keeps today's behavior byte-for-byte. Additive and
+    /// failure-proof: a missing key or a malformed value falls back to
+    /// `true`; `StorePayload.currentVersion` is NOT bumped; app-global,
+    /// never in `.nlx`.
+    public var sidebarVisible: Bool
+    /// Sheet Behavior (General Settings): what a launch selects,
+    /// what ⌘N does, the fresh-sheet template and the sidebar order.
+    /// Additive app-global preferences, failure-proof on decode and never
+    /// part of `.nlx`; `StorePayload.currentVersion` stays 2.
+    public var launchBehavior: LaunchSheetBehavior
+    public var commandN: CommandNBehavior
+    public var newSheetStart: NewSheetStart
+    public var sidebarSort: SidebarSortOrder
+    /// Floating Total (General Settings): keep the reserved space under
+    /// the answers (ON, the historical layout) or let the answers own the
+    /// full viewport with the interactive footer overlaid at the bottom
+    /// (OFF). The three inclusion switches are the frozen
+    /// `FooterContributionPolicy`. All additive and failure-proof: a
+    /// missing key or a malformed value falls back to the documented
+    /// default, the payload version stays 2 and nothing here enters
+    /// `.nlx`.
+    public var footerAvoidOverlap: Bool
+    public var footerIncludeReferencedLines: Bool
+    public var footerIncludeVariableLines: Bool
+    /// Numbers ▸ Auto-convert single units. Additive and failure-proof:
+    /// a missing key or a malformed value falls back to `off`, the
+    /// payload version stays 2 and nothing here enters `.nlx`.
+    public var autoConvertUnits: AutoConvertUnits
+
+    public static let defaults = AppSettings(
+        decimalPlaces: 10,
+        fontSizeKey: "tf",
+        language: .en,
+        sheetName: "Sheet",
+        lineNumbers: true,
+        hideSidebarButtonWhenCollapsed: false,
+        showTotalBar: true,
+        fontColor: "white",
+        customUnits: [],
+        windowFrame: nil,
+        sidebarVisible: true,
+        launchBehavior: .lastEdited,
+        commandN: .newSheet,
+        newSheetStart: .regularLine,
+        sidebarSort: .dateEdited,
+        footerAvoidOverlap: true,
+        footerIncludeReferencedLines: true,
+        footerIncludeVariableLines: true,
+        autoConvertUnits: .off
+)
+
+    /// r97: a fresh install starts in Auto (`appearance = .system`) and
+    /// with the modern Dark app icon; both are only DEFAULTS — a store
+    /// that persisted an explicit choice decodes that exact value.
+    public init(decimalPlaces: Int = 10, fontSizeKey: String = "tf", language: AppLanguage = .en, sheetName: String = "Sheet", lineNumbers: Bool = true, hideSidebarButtonWhenCollapsed: Bool = false, showTotalBar: Bool = true, fontColor: String = "white", input: InputPreferences = .defaults, styling: StylingPreferences = .defaults, customConstants: [UserConstant] = [], appearance: AppAppearance = .system, regional: RegionalNumberPreferences? = nil, customUnits: [UserUnitDefinition] = [], presentation: NumberPresentationPreferences = .defaults, appIcon: AppIconChoice = .dark, temporal: TemporalPreferences = .defaults, tax: TaxPreferences = .defaults, footerStatistic: FooterStatistic = .sum, windowFrame: SavedWindowFrame? = nil, sidebarVisible: Bool = true, launchBehavior: LaunchSheetBehavior = .lastEdited, commandN: CommandNBehavior = .newSheet, newSheetStart: NewSheetStart = .regularLine, sidebarSort: SidebarSortOrder = .dateEdited, footerAvoidOverlap: Bool = true, footerIncludeReferencedLines: Bool = true, footerIncludeVariableLines: Bool = true, autoConvertUnits: AutoConvertUnits = .off) {
+        self.temporal = temporal
+        self.decimalPlaces = decimalPlaces
+        self.fontSizeKey = fontSizeKey
+        self.language = language
+        self.sheetName = sheetName
+        self.lineNumbers = lineNumbers
+        self.hideSidebarButtonWhenCollapsed = hideSidebarButtonWhenCollapsed
+        self.showTotalBar = showTotalBar
+        self.fontColor = fontColor
+        self.input = input
+        self.styling = styling
+        self.customConstants = customConstants
+        self.appearance = appearance
+        self.regional = regional
+        self.customUnits = customUnits
+        self.presentation = presentation
+        self.appIcon = appIcon
+        self.tax = tax
+        self.footerStatistic = footerStatistic
+        self.windowFrame = windowFrame
+        self.sidebarVisible = sidebarVisible
+        self.launchBehavior = launchBehavior
+        self.commandN = commandN
+        self.newSheetStart = newSheetStart
+        self.sidebarSort = sidebarSort
+        self.footerAvoidOverlap = footerAvoidOverlap
+        self.footerIncludeReferencedLines = footerIncludeReferencedLines
+        self.footerIncludeVariableLines = footerIncludeVariableLines
+        self.autoConvertUnits = autoConvertUnits
+    }
+
+    /// Backward-compatible decode: the pre-r19 store has no `input` key
+    /// at all and must fall back to the defaults, not fail; the r21
+    /// `styling` key is optional the same way. StorePayload.version is
+    /// intentionally NOT bumped — decoding is purely additive.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // r88: the global rounding control is the 2...10 ticked slider —
+        // clamp on decode so the slider thumb, the `N dp` label and the
+        // stored value can never disagree for out-of-range legacy values
+        // (legacy UI only ever wrote 2...10).
+        decimalPlaces = min(max(try c.decode(Int.self, forKey: .decimalPlaces), 2), 10)
+        fontSizeKey = try c.decode(String.self, forKey: .fontSizeKey)
+        language = try c.decode(AppLanguage.self, forKey: .language)
+        sheetName = try c.decode(String.self, forKey: .sheetName)
+        lineNumbers = try c.decode(Bool.self, forKey: .lineNumbers)
+        // r60: additive — pre-r60 stores carry no key and fall back
+        // to false (StorePayload.version is NOT bumped).
+        hideSidebarButtonWhenCollapsed = (try? c.decodeIfPresent(Bool.self, forKey: .hideSidebarButtonWhenCollapsed)) ?? false
+        // r80: additive and failure-proof — a missing key (legacy
+        // store) or a malformed value falls back to true, the
+        // pre-r80 layout (StorePayload.version is NOT bumped).
+        showTotalBar = (try? c.decodeIfPresent(Bool.self, forKey: .showTotalBar)) ?? true
+        fontColor = try c.decode(String.self, forKey: .fontColor)
+        input = try c.decodeIfPresent(InputPreferences.self, forKey: .input) ?? .defaults
+        styling = (try? c.decodeIfPresent(StylingPreferences.self, forKey: .styling)) ?? .defaults
+        // r33: additive — pre-r33 stores carry no `customConstants` key
+        // at all and fall back to the empty list (StorePayload.version
+        // is NOT bumped).
+        customConstants = (try? c.decodeIfPresent([UserConstant].self, forKey: .customConstants)) ?? []
+        // r38: additive, key-by-key and failure-proof — a missing key
+        // (legacy store), an invalid raw value or a wrong JSON type all
+        // fall back to `.light` instead of failing the whole store
+        // (StorePayload.version is NOT bumped; nothing is migrated).
+        appearance = (try? c.decodeIfPresent(AppAppearance.self, forKey: .appearance)) ?? .light
+        // Additive and failure-proof: a missing key (legacy store), an
+        // invalid raw value or a wrong JSON type all fall back to the
+        // bundle default `.dark` — the modern primary icon. StorePayload
+        // version is NOT bumped and nothing is migrated.
+        appIcon = AppIconChoice.resolve(
+            (try? c.decodeIfPresent(String.self, forKey: .appIcon)) ?? nil)
+        // r73: additive — pre-r73 stores carry no `regional` key at
+        // all: `nil` is the legacy signal (pre-r73 US behavior). A
+        // present block decodes per-key tolerantly (see
+        // RegionalNumberPreferences).
+        regional = (try? c.decodeIfPresent(RegionalNumberPreferences.self, forKey: .regional))
+        // r84: additive — pre-r84 stores carry no `customUnits` key
+        // and fall back to the empty list (StorePayload.version is NOT
+        // bumped; nothing is migrated).
+        customUnits = (try? c.decodeIfPresent([UserUnitDefinition].self, forKey: .customUnits)) ?? []
+        // r87: additive — pre-r87 stores carry no `presentation` key
+        // and fall back to the defaults (StorePayload.version is NOT
+        // bumped; nothing is migrated). A present block decodes
+        // key-by-key tolerantly (see NumberPresentationPreferences).
+        presentation = (try? c.decodeIfPresent(NumberPresentationPreferences.self, forKey: .presentation)) ?? .defaults
+        // Temporal: additive, key-by-key and failure-proof — a missing key
+        // (legacy store) or a malformed block cannot lose the store.
+        temporal = (try? c.decodeIfPresent(TemporalPreferences.self, forKey: .temporal)) ?? .defaults
+        // Package 2 tax: the same additive, failure-proof contract.
+        tax = (try? c.decodeIfPresent(TaxPreferences.self, forKey: .tax)) ?? .defaults
+        // Package 7 footer statistic: additive, failure-proof, .sum
+        // default (unknown values decode tolerantly inside the enum).
+        footerStatistic = (try? c.decodeIfPresent(FooterStatistic.self,
+                                                  forKey: .footerStatistic)) ?? .sum
+        // Window frame and sidebar visibility: additive and
+        // failure-proof — a missing key (a legacy store), a wrong JSON
+        // type or a non-finite/zero/negative size all fall back to
+        // `nil` / `true`, which is exactly the behavior every earlier
+        // build had (centered 800x600, sidebar expanded). StorePayload
+        // version is NOT bumped and nothing is migrated.
+        windowFrame = (try? c.decodeIfPresent(SavedWindowFrame.self, forKey: .windowFrame))
+            .flatMap { $0.hasUsableSize ? $0 : nil }
+        sidebarVisible = (try? c.decodeIfPresent(Bool.self, forKey: .sidebarVisible)) ?? true
+        // Sheet Behavior: additive, key-by-key and failure-proof — a
+        // missing key (every earlier store), an unknown raw value or a
+        // wrong JSON type falls back to the documented default without
+        // failing the store. Version stays 2 and nothing is migrated.
+        launchBehavior = LaunchSheetBehavior.resolve(
+            (try? c.decodeIfPresent(String.self, forKey: .launchBehavior)) ?? nil)
+        commandN = CommandNBehavior.resolve(
+            (try? c.decodeIfPresent(String.self, forKey: .commandN)) ?? nil)
+        newSheetStart = NewSheetStart.resolve(
+            (try? c.decodeIfPresent(String.self, forKey: .newSheetStart)) ?? nil)
+        sidebarSort = SidebarSortOrder.resolve(
+            (try? c.decodeIfPresent(String.self, forKey: .sidebarSort)) ?? nil)
+        // Floating Total: additive and failure-proof — a missing key (every
+        // earlier store) or a wrong JSON type falls back to the historical
+        // behavior (reserved space, referenced lines and variable
+        // declarations included). Version stays 2; nothing is migrated.
+        footerAvoidOverlap = (try? c.decodeIfPresent(Bool.self, forKey: .footerAvoidOverlap)) ?? true
+        footerIncludeReferencedLines = (try? c.decodeIfPresent(Bool.self, forKey: .footerIncludeReferencedLines)) ?? true
+        footerIncludeVariableLines = (try? c.decodeIfPresent(Bool.self, forKey: .footerIncludeVariableLines)) ?? true
+        // Numbers ▸ Auto-convert: additive and failure-proof — a missing
+        // key (every earlier store) or a wrong JSON type falls back to
+        // `off`, the previous evaluation byte-for-byte. Version stays 2.
+        autoConvertUnits = AutoConvertUnits.resolve(
+            (try? c.decodeIfPresent(String.self, forKey: .autoConvertUnits)) ?? nil)
+    }
+
+    /// The resolved auto-conversion target, or nil when the preference is
+    /// Off. The measurement system is injected by the app (the macOS
+    /// locale), so the pure evaluation context stays deterministic.
+    public func localUnitSystem(measurementSystem: Locale.MeasurementSystem) -> LocalUnitSystem? {
+        guard autoConvertUnits == .localUnits else { return nil }
+        return LocalUnitSystem.from(measurementSystem)
+    }
+
+    /// The frozen Floating Total contribution policy of this settings
+    /// snapshot. Pure: the live footer and the export snapshot build it
+    /// from the same source.
+    public var footerContributionPolicy: FooterContributionPolicy {
+        FooterContributionPolicy(includeReferencedLines: footerIncludeReferencedLines,
+                                 includeVariableDeclarations: footerIncludeVariableLines)
+    }
+
+    public var fontSize: Double {
+        // Every level is exactly 1 pt above the previous scale so that
+        // persisted keys keep their relative size and both the editor
+        // body and the answer column grow together.
+        switch fontSizeKey {
+        case "ttt": return 18
+        case "tt": return 19
+        case "tf": return 20
+        case "tff": return 21
+        case "ts": return 22
+        case "tss": return 24
+        case "te": return 26
+        case "tn": return 28
+        case "tth": return 30
+        default: return 20
+        }
+    }
+    /// Derives the line height from the EFFECTIVE font size so TextKit
+    /// metrics and the answer column stay 1:1 at every settings level.
+    public var lineHeight: Double { (fontSize * 1.6).rounded() }
+}
+
+public let fontSizeOptions: [(key: String, label: String)] = [
+    ("ttt", "18"), ("tt", "19"), ("tf", "20"), ("tff", "21"), ("ts", "22"), ("tss", "24"), ("te", "26"), ("tn", "28"), ("tth", "30")
+]
